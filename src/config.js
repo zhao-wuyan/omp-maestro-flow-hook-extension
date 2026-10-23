@@ -107,7 +107,14 @@ export async function loadBridgeConfig(file, env = process.env) {
   for (const key of ['maestroCli', 'node']) {
     if (config[key] !== undefined && (typeof config[key] !== 'string' || !path.isAbsolute(config[key]))) throw new HookError('config', `${key} must be an absolute path`);
   }
-  const runtime = await resolveRuntime(config, env);
+  let runtime;
+  try { runtime = await resolveRuntime(config, env); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.kind === 'spawn') {
+      throw new HookError('unavailable', 'The Maestro CLI or Node runtime is missing or cannot be started');
+    }
+    throw error;
+  }
   const catalog = runtime.catalogs[source.kind === 'codex' ? 'codex' : 'claude'];
   let hooks;
   if (source.kind === 'catalog') {

@@ -17,7 +17,7 @@ export async function findExecutable(name, env = process.env) {
       if (await exists(file)) return file;
     }
   }
-  throw new HookError('runtime', `${name} is not available on PATH`);
+  throw new HookError('unavailable', `${name} is not available on PATH`);
 }
 
 async function verifyCli(file) {

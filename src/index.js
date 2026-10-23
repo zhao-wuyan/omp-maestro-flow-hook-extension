@@ -63,7 +63,14 @@ export default function maestroHooks(api) {
       ownedSessions.add(id);
       authorizedConfigs.set(ctx.cwd, configFile);
       bridge = new Bridge(config);
-    } catch (error) { fail(error, ctx); }
+    } catch (error) {
+      if (error instanceof HookError && error.kind === 'unavailable') {
+        const reason = `Maestro is unavailable: ${error.message}. Maestro hooks are suspended; conversation and tools remain available. Install or repair Maestro, then run /maestro-hooks reload.`;
+        bridge = new Bridge({ enabled: false, hooks: [], reason });
+        api.logger.warn('Maestro hook bridge suspended', { kind: error.kind });
+        api.sendMessage({ customType: 'maestro-hooks-warning', display: true, content: reason }, { triggerTurn: false });
+      } else fail(error, ctx);
+    }
   }
 
   const enabled = ctx => {

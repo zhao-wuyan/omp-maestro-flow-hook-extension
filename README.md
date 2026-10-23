@@ -26,7 +26,7 @@ omp plugin install https://github.com/zhao-wuyan/omp-maestro-flow-hook-extension
 /maestro-hooks init
 ```
 
-命令默认在当前 OMP agent 配置目录创建 `maestro-hooks.json`，内容为 `catalog + standard`；随后加载配置、以 resume 语义初始化并显示状态。已有文件（包括损坏的文件）绝不覆盖，需自行修正。若 Maestro 无法解析或存在桥接冲突，状态明确显示错误，不把“文件已创建”当作启用成功。
+命令默认在当前 OMP agent 配置目录创建 `maestro-hooks.json`，内容为 `catalog + standard`；随后加载配置、以 resume 语义初始化并显示状态。已有文件（包括损坏的文件）绝不覆盖，需自行修正。若 Maestro CLI 或 Node 缺失，则明确告警并暂停桥接，不影响正常对话和工具；其他配置／协议错误及桥接冲突会明确报错，不把“文件已创建”当作启用成功。
 
 安装动作本身不会生成配置。`init` 是显式授权动作；创建后，后续 OMP 启动会自动读取该用户级配置，无需设置环境变量。不会修改 OMP 主配置、全局环境变量或扫描项目目录中的任意 Hook 文件。
 
@@ -154,7 +154,8 @@ hashline edit 对每个实际目标执行检查，不把派生 `path`／`paths` 
 
 - `cwd` 来自事件会话；`session_id` 使用真实 OMP session ID，主／子会话隔离，恢复稳定，与 Maestro 通知文件关联一致。
 - 顶层／嵌套 `additionalContext`、嵌套 `updatedInput`、顶层／嵌套 `permissionDecision`、`decision`／`reason`、退出码 2 生效。告警不升级为阻断；其他非零退出为基础设施错误，不冒充业务拒绝。`ask` 没有足够宿主协议时明确报错。
-- 基础设施错误在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。已执行的 PostToolUse 不能回滚，错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
+- Maestro CLI 不在 PATH、配置中的安装路径已失效或 Node 无法启动时，会话启动时显示并保存一条告警，暂停 Maestro 桥接；**正常对话和所有工具继续工作**，方便让 AI 安装或修复依赖。状态显示 `enabled: false`、`disabledReason`，不伪装 Hook 已运行，也不逐条消息重复告警。修复后执行 `/maestro-hooks reload` 恢复；不自动安装依赖或改写配置。
+- 上述依赖缺失以外的基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。真实 evaluator 的退出码 2／明确 deny 仍阻断工具，不因缺失依赖降级策略而放行。已执行的 PostToolUse 不能回滚，错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
 - 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期使用 `systemPrompt`。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
 - 原生 `claudeHooks.enabled` 打开即报冲突，不静默叠加；同会话重复插件实例也拒绝。不能识别任意第三方手写扩展的行为，不声称能检测所有外部桥接。
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。

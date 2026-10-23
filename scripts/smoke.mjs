@@ -27,6 +27,8 @@ await writeFile(sourceFile, JSON.stringify({ hooks }));
 const bridgeFile = path.join(root, 'bridge.json');
 await writeFile(bridgeFile, JSON.stringify({ version: 1, source: { kind: 'claude', path: sourceFile } }));
 let calls = 0;
+let repairMode = false;
+let repairCalls = 0;
 const requests = [];
 const server = createServer(async (req, res) => {
   let body = '';
@@ -35,7 +37,14 @@ const server = createServer(async (req, res) => {
   requests.push(payload);
   let delta;
   let finish;
-  if (calls === 0) {
+  if (repairMode && repairCalls++ === 0) {
+    delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'repair-write', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: path.join(workspace, 'repair.txt'), content: 'AI can repair missing Maestro' }) } }] };
+    finish = 'tool_calls';
+  } else if (repairMode && repairCalls === 2) {
+    delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'repair-bash', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: 'echo repair-tool-ok' }) } }] };
+    finish = 'tool_calls';
+  } else if (repairMode) { delta = { role: 'assistant', content: 'Repair tools remain available.' }; finish = 'stop'; }
+  else if (calls === 0) {
     delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'write-smoke', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: path.join(workspace, 'result.txt'), content: 'actual OMP tool execution' }) } }] };
     finish = 'tool_calls';
   } else if (calls === 1) {
@@ -177,7 +186,32 @@ try {
   const persisted = await status('persisted');
   assert.equal(persisted.enabled, true, JSON.stringify(persisted));
   assert.equal(persisted.configuration, initialized.configuration);
-  console.log(JSON.stringify({ result: 'PASS', omp: 'actual process with project-local installed manifest', evaluator: 'actual Maestro CLI', provider: 'local deterministic HTTP fixture; not a real LLM', trustedKnowledgeContext: true, toolExecuted: true, toolBlocked: true, userPromptExactlyOnce: true, stopExactlyOnce: true, startupResumeMatchers: true, configurationRecovery: true, printPromptGuard: true, initializationAndRestart: true, modelRequests: calls }, null, 2));
+  await stop();
+  const repairedConfig = await readFile(initialized.configuration, 'utf8');
+  await writeFile(initialized.configuration, JSON.stringify({ version: 1, maestroCli: path.join(root, 'missing-maestro', 'bin', 'maestro.js'), source: { kind: 'catalog', level: 'standard' } }));
+  await launch();
+  const missing = await status('missing-cli');
+  assert.equal(missing.enabled, false);
+  assert.equal(missing.error, null, 'Missing CLI must not latch a conversation-blocking error');
+  assert.match(missing.disabledReason, /Maestro.*unavailable/i);
+  send({ id: 'startup-messages', type: 'get_messages' });
+  const startupMessages = await waitFor(frame => frame.type === 'response' && frame.id === 'startup-messages');
+  assert(startupMessages.data.messages.some(message => message.customType === 'maestro-hooks-warning' && message.display === true && /Maestro.*unavailable/i.test(message.content)), 'Session startup must persist a visible missing CLI warning before RPC subscribers attach');
+  repairMode = true;
+  frames.length = 0;
+  send({ id: 'repair-with-ai', type: 'prompt', message: 'Use available tools to repair the missing Maestro installation.' });
+  await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'repair-with-ai', 45000);
+  assert.equal(await readFile(path.join(workspace, 'repair.txt'), 'utf8'), 'AI can repair missing Maestro');
+  assert(requests.at(-1).messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('repair-tool-ok')), 'Bash must remain executable without Maestro');
+  assert(frames.some(frame => frame.type === 'message_end' && frame.message.role === 'assistant' && JSON.stringify(frame.message.content).includes('Repair tools remain available.')), 'Conversation must complete without Maestro');
+  assert.equal(frames.filter(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-warning').length, 0, 'Do not repeat the missing CLI warning on every prompt or tool');
+  await writeFile(initialized.configuration, repairedConfig);
+  frames.length = 0;
+  send({ id: 'repair-reload', type: 'prompt', message: '/maestro-hooks reload' });
+  const repairedFrame = await waitFor(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-status');
+  assert.equal(JSON.parse(repairedFrame.message.content).enabled, true, 'Reload must restore hooks after CLI repair');
+  await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'repair-reload');
+  console.log(JSON.stringify({ result: 'PASS', omp: 'actual process with project-local installed manifest', evaluator: 'actual Maestro CLI', provider: 'local deterministic HTTP fixture; not a real LLM', trustedKnowledgeContext: true, toolExecuted: true, toolBlocked: true, userPromptExactlyOnce: true, stopExactlyOnce: true, startupResumeMatchers: true, configurationRecovery: true, printPromptGuard: true, initializationAndRestart: true, missingCliConversationAndTools: true, missingCliReloadRecovery: true, modelRequests: calls }, null, 2));
 } finally {
   await stop();
   await new Promise(resolve => server.close(resolve));
