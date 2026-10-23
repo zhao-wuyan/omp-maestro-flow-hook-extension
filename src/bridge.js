@@ -9,21 +9,36 @@ export function sessionId(ctx) {
 }
 
 export class Bridge {
-  constructor(config) { this.config = config; this.lastError = undefined; this.counts = {}; }
+  constructor(config, onInvocation) { this.config = config; this.counts = {}; this.onInvocation = onInvocation; }
 
   async invoke(hook, input, deadline, signal) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new HookError('timeout', 'Maestro event exceeded its execution budget');
-    const { runtime } = this.config;
-    const result = await runProcess(runtime.node, [runtime.cli, 'hooks', 'run', hook.name], {
-      cwd: input.cwd,
-      // 不继承另一宿主遗留的项目定位变量，工作目录由实际事件提供。
-      env: { ...process.env, MAESTRO_PROJECT_ROOT: input.cwd, CLAUDE_PROJECT_DIR: input.cwd },
-      input: JSON.stringify(input),
-      timeoutMs: Math.min(hook.timeoutMs ?? this.config.timeoutMs, remaining), signal,
-    });
-    this.counts[hook.name] = (this.counts[hook.name] ?? 0) + 1;
-    return interpretOutput(result, input.hook_event_name);
+    const started = performance.now();
+    let outcome = 'error';
+    try {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new HookError('timeout', 'Maestro event exceeded its execution budget');
+      const { runtime } = this.config;
+      const result = await runProcess(runtime.node, [runtime.cli, 'hooks', 'run', hook.name], {
+        cwd: input.cwd,
+        // 不继承另一宿主遗留的项目定位变量，工作目录由实际事件提供。
+        env: { ...process.env, MAESTRO_PROJECT_ROOT: input.cwd, CLAUDE_PROJECT_DIR: input.cwd },
+        input: JSON.stringify(input),
+        timeoutMs: Math.min(hook.timeoutMs ?? this.config.timeoutMs, remaining), signal,
+      });
+      this.counts[hook.name] = (this.counts[hook.name] ?? 0) + 1;
+      const output = interpretOutput(result, input.hook_event_name);
+      const outcomes = [];
+      if (output.blocked) outcomes.push('blocked');
+      if (output.updatedInput) outcomes.push('updated');
+      if (output.context) outcomes.push('context');
+      outcome = outcomes.join('+') || 'no-output';
+      return output;
+    } catch (error) {
+      outcome = ['timeout', 'cancelled'].includes(error.kind) ? error.kind : 'error';
+      throw error;
+    } finally {
+      this.onInvocation?.({ sessionId: input.session_id, event: input.hook_event_name, hook: hook.name, durationMs: Math.round(performance.now() - started), outcome });
+    }
   }
 
   async lifecycle(event, ctx, extra = {}, signal) {

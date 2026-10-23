@@ -188,6 +188,30 @@ omp plugin list --local
 
 显示来源、Maestro 版本、Hook／matcher 清单、已调用次数、加载错误、原生桥接冲突。计数是 CLI 调用次数，不代表 evaluator 一定注入（Maestro 可因 toggle／workspace 合法 no-op）。配置错误后仍可执行恢复命令；重载清除旧上下文，以 resume 语义初始化，不重复 startup-only 副作用。
 
+### 终端显示和调试模式
+
+会话启动默认显示一条摘要：启用状态、来源／级别、加载的 Hook 数量、Maestro 版本、debug 状态。主会话每个 session ID 只显示一次；缺少 CLI 时沿用暂停告警，不再额外重复摘要。摘要中的“加载”不代表每个 evaluator 都会注入，Maestro 的开关和工作区条件仍生效。
+
+正常 Hook 成功执行不刷屏。需要排查时，在 OMP 对话框中输入：
+
+```text
+/maestro-hooks debug on
+/maestro-hooks debug
+/maestro-hooks debug off
+```
+
+分别为开启、查询、关闭。默认关闭，只对当前会话生效，不写入配置文件；新会话、子会话和进程重启后默认关闭。同会话配置 reload 不改变 debug 开关。debug 不会开启任何 Maestro evaluator，也不改变阻断语义。
+
+开启后每个实际调用显示一条简短记录，例如：
+
+```text
+[Maestro Hook] PreToolUse / knowledge-guard · 42 ms · context
+```
+
+结果类型为 `context`（有上下文）、`updated`（有参数更新）、`blocked`（明确阻断）、`no-output`（成功但无输出）、`error`、`timeout`、`cancelled`；同时发生时以 `+` 组合。`no-output` 无法区分副作用成功、关闭开关或工作区 no-op，不宣称这些情况一定执行了业务逻辑。
+
+不显示 prompt、工具参数、工具响应、阻断原因正文、stdout／stderr 或注入正文。这些调试记录通过 OMP 可见扩展消息显示并可能保存在会话历史中，但在 provider 请求前过滤，不作为模型上下文；开启前的调用不会补发记录，关闭后停止新增。
+
 停用：配置 `"enabled": false` 后重载。卸载：在安装项目执行 `omp plugin uninstall omp-maestro-flow-hooks --local`，清除自己设置的环境变量即可；不移除 Maestro／其他宿主配置。初始化生成的 JSON 会保留，确认其他项目／profile 不再使用后可自行删除。
 
 ## 安全与失败策略

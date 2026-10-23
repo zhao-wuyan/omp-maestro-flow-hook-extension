@@ -23,6 +23,32 @@ export default function maestroHooks(api) {
   const ownedSessions = new Set();
   let ignoredExtensionPrompts = 0;
   let operation = new AbortController();
+  const debugSessions = new Set();
+  const summarizedSessions = new Set();
+  const debugEnabled = ctx => debugSessions.has(ctx.sessionManager.getSessionId());
+  const reportInvocation = ({ sessionId, event, hook, durationMs, outcome }) => {
+    if (!debugSessions.has(sessionId)) return;
+    api.sendMessage({ customType: 'maestro-hooks-debug', display: true, content: `[Maestro Hook] ${event} / ${hook} · ${durationMs} ms · ${outcome}` }, { triggerTurn: false });
+  };
+  const summarize = ctx => {
+    if (ctx.agent.kind !== 'main') return;
+    const id = ctx.sessionManager.getSessionId();
+    if (summarizedSessions.has(id)) return;
+    summarizedSessions.add(id);
+    if (failure || bridge?.config.reason?.startsWith('Maestro is unavailable:')) return;
+    const config = bridge?.config;
+    const source = config?.source;
+    const content = config?.enabled
+      ? `[Maestro Hooks] 已启用 · ${source.kind}${source.level ? `/${source.level}` : ''} · ${config.hooks.length} 个 Hook · Maestro ${config.runtime.version} · debug ${debugEnabled(ctx) ? '开启' : '关闭'}`
+      : `[Maestro Hooks] 未启用 · ${config?.reason ?? '无可用配置'} · /maestro-hooks init`;
+    api.sendMessage({ customType: 'maestro-hooks-summary', display: true, content }, { triggerTurn: false });
+  };
+
+  api.on('context', event => {
+    const uiOnly = new Set(['maestro-hooks-debug', 'maestro-hooks-debug-state', 'maestro-hooks-summary']);
+    if (!event.messages.some(message => message.role === 'custom' && uiOnly.has(message.customType))) return;
+    return { messages: event.messages.filter(message => message.role !== 'custom' || !uiOnly.has(message.customType)) };
+  });
 
   const fail = (error, ctx) => {
     const kind = error instanceof HookError ? error.kind : 'config';
@@ -62,7 +88,7 @@ export default function maestroHooks(api) {
       instances.set(id, api);
       ownedSessions.add(id);
       authorizedConfigs.set(ctx.cwd, configFile);
-      bridge = new Bridge(config);
+      bridge = new Bridge(config, reportInvocation);
     } catch (error) {
       if (error instanceof HookError && error.kind === 'unavailable') {
         const reason = `Maestro is unavailable: ${error.message}. Maestro hooks are suspended; conversation and tools remain available. Install or repair Maestro, then run /maestro-hooks reload.`;
@@ -99,9 +125,10 @@ export default function maestroHooks(api) {
     await reload(ctx);
     const source = process.argv.some(arg => ['--resume', '-r', '--continue', '-c', '--restore'].includes(arg) || /^--(?:resume|restore)=/.test(arg)) || ctx.sessionManager.getEntries().some(entry => entry.type === 'message') ? 'resume' : 'startup';
     await start(ctx, source);
+    summarize(ctx);
   });
-  api.on('session_switch', async (event, ctx) => { await start(ctx, event.reason === 'new' ? 'startup' : 'resume'); });
-  api.on('session_branch', async (_event, ctx) => { await start(ctx, 'resume'); });
+  api.on('session_switch', async (event, ctx) => { await start(ctx, event.reason === 'new' ? 'startup' : 'resume'); summarize(ctx); });
+  api.on('session_branch', async (_event, ctx) => { await start(ctx, 'resume'); summarize(ctx); });
 
   api.on('input', async (event, ctx) => {
     if (operation.signal.aborted) operation = new AbortController();
@@ -164,8 +191,17 @@ export default function maestroHooks(api) {
   });
 
   api.registerCommand('maestro-hooks', {
-    description: 'Maestro hook bridge: init | status | reload',
+    description: 'Maestro hook bridge: init | status | reload | debug [on|off]',
     handler: async (args, ctx) => {
+      const command = args.trim();
+      if (/^debug(?:\s|$)/.test(command)) {
+        if (!['debug', 'debug on', 'debug off'].includes(command)) { ctx.ui.notify('Usage: /maestro-hooks debug [on|off]', 'warning'); return; }
+        const id = ctx.sessionManager.getSessionId();
+        if (command === 'debug on') debugSessions.add(id);
+        if (command === 'debug off') debugSessions.delete(id);
+        api.sendMessage({ customType: 'maestro-hooks-debug-state', display: true, content: `Maestro Hook debug ${debugEnabled(ctx) ? '已开启' : '已关闭'}，仅当前会话生效。` }, { triggerTurn: false });
+        return;
+      }
       if (args.trim() === 'init') {
         try {
           const file = api.getFlag('maestro-hooks-config') || process.env.OMP_MAESTRO_HOOKS_CONFIG || path.join(findScopedSettings(ctx.cwd).getAgentDir(), 'maestro-hooks.json');
@@ -175,10 +211,11 @@ export default function maestroHooks(api) {
           await start(ctx, 'resume');
         } catch (error) { fail(error, ctx); }
       } else if (args.trim() === 'reload') { await reload(ctx); await start(ctx, 'resume'); }
-      else if (args.trim() && args.trim() !== 'status') { ctx.ui.notify('Usage: /maestro-hooks init | status | reload', 'warning'); return; }
+      else if (args.trim() && args.trim() !== 'status') { ctx.ui.notify('Usage: /maestro-hooks init | status | reload | debug [on|off]', 'warning'); return; }
       const config = bridge?.config;
       api.sendMessage({ customType: 'maestro-hooks-status', display: true, content: JSON.stringify({
         enabled: !!config?.enabled && !failure, configuration: configFile ?? null, source: config?.source ?? null,
+        debug: debugEnabled(ctx),
         maestroVersion: config?.runtime?.version ?? null,
         hooks: config?.hooks ?? [], counts: bridge?.counts ?? {}, error: failure ?? null,
         disabledReason: config?.reason ?? null, nativeOverlap: failure?.includes('conflict') ? 'conflict' : 'none detected',
