@@ -202,7 +202,7 @@ omp plugin list --local
 
 分别为开启、查询、关闭。默认关闭，只对当前会话生效，不写入配置文件；新会话、子会话和进程重启后默认关闭。同会话配置 reload 不改变 debug 开关。debug 不会开启任何 Maestro evaluator，也不改变阻断语义。
 
-开启后每个实际调用显示一条灰色单行记录，与 OMP 原生灰色提示一致；无标题、边框、背景或上下内边距，窄窗口中末尾省略而不折行。启动摘要和 debug 开关提示使用相同紧凑样式。例如：
+开启后每个实际调用使用 OMP 原生灰色 info 提示显示，不创建带标题、边框和背景的扩展消息卡片；连续提示由宿主合并更新。启动摘要和 debug 开关提示仍使用灰色紧凑单行，窄窗口中末尾省略而不折行。例如：
 
 ```text
 [Maestro Hook] PreToolUse / knowledge-guard · 42 ms · context
@@ -210,7 +210,7 @@ omp plugin list --local
 
 结果类型为 `context`（有上下文）、`updated`（有参数更新）、`blocked`（明确阻断）、`no-output`（成功但无输出）、`error`、`timeout`、`cancelled`；同时发生时以 `+` 组合。`no-output` 无法区分副作用成功、关闭开关或工作区 no-op，不宣称这些情况一定执行了业务逻辑。
 
-不显示 prompt、工具参数、工具响应、阻断原因正文、stdout／stderr 或注入正文。这些调试记录通过 OMP 可见扩展消息显示并可能保存在会话历史中，但在 provider 请求前过滤，不作为模型上下文；开启前的调用不会补发记录，关闭后停止新增。
+不显示 prompt、工具参数、工具响应、阻断原因正文、stdout／stderr 或注入正文。调用调试记录仅通过 `ctx.ui.notify(..., 'info')` 显示，不写入对话消息或模型队列，因此不会触发额外回答；RPC 通过 UI notify 事件接收，headless `--no-ui` 模式不显示。旧版保存在会话历史中的调试消息仍在 provider 请求前过滤。开启前的调用不会补发记录，关闭后停止新增。
 
 停用：配置 `"enabled": false` 后重载。卸载：在安装项目执行 `omp plugin uninstall omp-maestro-flow-hooks --local`，清除自己设置的环境变量即可；不移除 Maestro／其他宿主配置。初始化生成的 JSON 会保留，确认其他项目／profile 不再使用后可自行删除。
 

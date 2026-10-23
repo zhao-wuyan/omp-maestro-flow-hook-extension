@@ -21,7 +21,7 @@ const hooks = {
   UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'maestro hooks run skill-context' }] }],
   PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: 'maestro hooks run knowledge-guard' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'maestro hooks run workflow-guard' }] }],
   PostToolUse: [{ matcher: 'Bash|Agent', hooks: [{ type: 'command', command: 'maestro hooks run delegate-monitor' }] }],
-  Stop: [{ hooks: [{ type: 'command', command: 'maestro hooks run telemetry' }] }],
+  Stop: [{ hooks: [{ type: 'command', command: 'maestro hooks run team-monitor' }, { type: 'command', command: 'maestro hooks run telemetry' }, { type: 'command', command: 'maestro hooks run coordinator-tracker' }] }],
 };
 await writeFile(sourceFile, JSON.stringify({ hooks }));
 const bridgeFile = path.join(root, 'bridge.json');
@@ -83,7 +83,7 @@ function waitFor(predicate, timeoutMs = 25000) {
 function send(message) { child.stdin.write(JSON.stringify(message) + '\n'); }
 async function launch(extra = []) {
   frames.length = 0;
-  child = spawn(process.env.OMP_BINARY || 'omp', ['--mode', 'rpc', '--no-ui', '--model', 'maestro-smoke/smoke', '--no-skills', '--no-rules', '--no-lsp', '--no-title', '--no-pty', '--tools', 'write,bash', '--auto-approve', '--cwd', workspace, ...extra], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  child = spawn(process.env.OMP_BINARY || 'omp', ['--mode', 'rpc', '--model', 'maestro-smoke/smoke', '--no-skills', '--no-rules', '--no-lsp', '--no-title', '--no-pty', '--tools', 'write,bash', '--auto-approve', '--cwd', workspace, ...extra], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let partial = '';
   child.stdout.on('data', data => {
     partial += data;
@@ -136,13 +136,19 @@ try {
   assert(frames.some(frame => frame.type === 'message_end' && frame.message.role === 'developer' && frame.message.attribution === 'agent' && JSON.stringify(frame.message.content).includes('[KnowledgeGuard]')), 'Real evaluator warning must enter the OMP trusted developer channel');
   assert(requests.some(request => request.messages.some(message => JSON.stringify(message.content).includes('[KnowledgeGuard]'))), 'Real warning must reach the next provider request');
   assert(requests.some(request => JSON.stringify(request.messages).includes('[WorkflowGuard]')), 'Actual denied tool must report evaluator reason');
-  const debugRows = frames.filter(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-debug').map(frame => frame.message.content);
+  assert.equal(requests.length, 3, 'Debug messages must not start extra provider requests after the tool flow completes');
+  assert.equal(frames.filter(frame => frame.type === 'message_end' && frame.message.role === 'assistant' && frame.message.stopReason === 'stop').length, 1, 'One user prompt must produce only one final answer with debug enabled');
+  const debugRows = frames.filter(frame => frame.type === 'extension_ui_request' && frame.method === 'notify' && frame.message.startsWith('[Maestro Hook]')).map(frame => frame.message);
   assert(debugRows.some(row => /PreToolUse \/ knowledge-guard.*\d+ ms.*context/.test(row)));
   assert(debugRows.some(row => /PreToolUse \/ workflow-guard.*blocked/.test(row)));
+  for (const name of ['team-monitor', 'telemetry', 'coordinator-tracker']) {
+    assert(debugRows.some(row => row.includes(`Stop / ${name}`)), `Stop debug notification missing: ${name}`);
+  }
   assert(!debugRows.some(row => /PRIVATE_PROMPT_SENTINEL|actual OMP tool execution|git reset|KnowledgeGuard\]/.test(row)), 'Debug must not leak prompts, arguments, tool results or injection text');
   assert(!requests.some(request => JSON.stringify(request.messages).includes('[Maestro Hook]')), 'UI debug rows must not enter provider context');
   frames.length = 0;
   const beforeReload = await status('before-reload');
+  assert.equal(requests.length, 3, 'Stop debug rows must not schedule provider requests after prompt_result');
   assert.equal(beforeReload.counts['skill-context'], 1, 'Debug control messages are not user prompt submissions');
   assert.equal(beforeReload.counts.telemetry, 1, 'One true Stop, not every tool turn');
   frames.length = 0;
@@ -151,7 +157,7 @@ try {
   frames.length = 0;
   send({ id: 'debug-off-reload', type: 'prompt', message: '/maestro-hooks reload' });
   await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'debug-off-reload');
-  assert.equal(frames.filter(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-debug').length, 0, 'Debug off suppresses subsequent real Hook calls');
+  assert.equal(frames.filter(frame => frame.type === 'extension_ui_request' && frame.method === 'notify' && frame.message.startsWith('[Maestro Hook]')).length, 0, 'Debug off suppresses subsequent real Hook calls');
   frames.length = 0;
   const final = await status('final');
   assert.equal(final.counts['skill-context'], undefined, 'Reload resets counters; debug commands never submit user prompts');
@@ -177,7 +183,7 @@ try {
   const recoveredFrame = await waitFor(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-status');
   assert.equal(JSON.parse(recoveredFrame.message.content).enabled, true, 'Recovery command must remain reachable after failure');
   await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'recover-reload');
-  assert.equal(frames.filter(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-debug').length, 0, 'Debug off must suppress hook execution rows');
+  assert.equal(frames.filter(frame => frame.type === 'extension_ui_request' && frame.method === 'notify' && frame.message.startsWith('[Maestro Hook]')).length, 0, 'Debug off must suppress hook execution rows');
   await stop();
   // print 无 input 事件：用真实 prompt-guard 返回的告警证明提交被评估。
   hooks.UserPromptSubmit = [{ hooks: [{ type: 'command', command: 'maestro hooks run prompt-guard' }] }];

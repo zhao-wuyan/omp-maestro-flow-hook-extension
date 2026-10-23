@@ -13,7 +13,7 @@ const authorizedConfigs = globalThis[CONFIGS] ??= new Map();
 export default function maestroHooks(api) {
   api.setLabel('Maestro host hooks');
   api.registerFlag('maestro-hooks-config', { type: 'string', description: 'Absolute path to explicitly authorized Maestro bridge JSON' });
-  for (const type of ['maestro-hooks-debug', 'maestro-hooks-debug-state', 'maestro-hooks-summary']) {
+  for (const type of ['maestro-hooks-debug-state', 'maestro-hooks-summary']) {
     api.registerMessageRenderer(type, (message, _options, theme) => new TruncatedText(theme.fg('dim', message.content), 1, 0));
   }
   let bridge;
@@ -30,9 +30,10 @@ export default function maestroHooks(api) {
   const debugSessions = new Set();
   const summarizedSessions = new Set();
   const debugEnabled = ctx => debugSessions.has(ctx.sessionManager.getSessionId());
-  const reportInvocation = ({ sessionId, event, hook, durationMs, outcome }) => {
+  const reportInvocation = ({ sessionId, event, hook, durationMs, outcome }, ctx) => {
     if (!debugSessions.has(sessionId)) return;
-    api.sendMessage({ customType: 'maestro-hooks-debug', display: true, content: `[Maestro Hook] ${event} / ${hook} · ${durationMs} ms · ${outcome}` }, { triggerTurn: false });
+    // triggerTurn:false 在宿主忙碌时仍会进入 steer 队列；调试输出只能走被动 UI 通知。
+    ctx.ui.notify(`[Maestro Hook] ${event} / ${hook} · ${durationMs} ms · ${outcome}`, 'info');
   };
   const summarize = ctx => {
     if (ctx.agent.kind !== 'main') return;
@@ -92,7 +93,7 @@ export default function maestroHooks(api) {
       instances.set(id, api);
       ownedSessions.add(id);
       authorizedConfigs.set(ctx.cwd, configFile);
-      bridge = new Bridge(config, reportInvocation);
+      bridge = new Bridge(config, row => reportInvocation(row, ctx));
     } catch (error) {
       if (error instanceof HookError && error.kind === 'unavailable') {
         const reason = `Maestro is unavailable: ${error.message}. Maestro hooks are suspended; conversation and tools remain available. Install or repair Maestro, then run /maestro-hooks reload.`;
