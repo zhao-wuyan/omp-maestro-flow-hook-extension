@@ -138,6 +138,46 @@ Maestro 自身 `hooks.toggles`、`MAESTRO_HOOKS_ENABLE`／`MAESTRO_HOOKS_DISABLE
 
 hashline edit 对每个实际目标执行检查，不把派生 `path`／`paths` 写回执行参数；当前 catalog 不改写 edit。未来 evaluator 若要求不能无损转换的 edit `updatedInput`，明确失败，不伪装支持。多个 Hook 按来源顺序执行，后续 Hook 看见前序更新。
 
+## 升级插件
+
+先退出正在运行的 OMP，在原安装项目目录执行项目级升级：
+
+```sh
+omp plugin upgrade omp-maestro-flow-hooks --local
+omp plugin list --local
+```
+
+用户级安装则省略 `--local`：
+
+```sh
+omp plugin upgrade omp-maestro-flow-hooks
+omp plugin list
+```
+
+正常升级不需要先卸载，`maestro-hooks.json` 会保留。升级后重新启动 OMP；`/maestro-hooks reload` 只重读桥接配置，不下载或更新插件源码。无需重复执行 `init`。
+
+### 固定提交与本地源码链接
+
+- GitHub URL 带 `#<commit>` 时锁定该提交，`upgrade` 不会自动切换到最新提交。希望跟随仓库默认分支时，重新安装不带提交后缀的 URL：
+
+  ```sh
+  omp plugin install https://github.com/zhao-wuyan/omp-maestro-flow-hook-extension --local
+  ```
+
+- 本地路径安装属于源码链接，不能用 `upgrade` 下载 GitHub 更新。应在源码目录执行 `git pull`；或者卸载链接，再从 GitHub 安装。
+
+### Windows 更新报 symlink EPERM
+
+如果错误包含 `EPERM: operation not permitted, symlink ... omp-plugin-backup-...`，说明 OMP 安装器备份旧插件链接时失败，不是 Maestro evaluator 的问题。重复运行安装或增加 `--force` 不能可靠解决。先退出 OMP，在同一项目目录卸载旧链接再安装：
+
+```powershell
+omp plugin uninstall omp-maestro-flow-hooks --local
+omp plugin install https://github.com/zhao-wuyan/omp-maestro-flow-hook-extension --local
+omp plugin list --local
+```
+
+用户级安装执行相同操作，但三条命令都省略 `--local`。卸载不会移除桥接配置或链接指向的源码目录；不需要手动删除报错中的临时备份目录，也不建议为此关闭安全保护或默认使用管理员权限。只有遇到此类更新故障才需要卸载重装，不是常规升级步骤。
+
 ## 状态、重载和卸载
 
 ```text
