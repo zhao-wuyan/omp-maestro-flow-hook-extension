@@ -202,7 +202,7 @@ omp plugin list --local
 
 分别为开启、查询、关闭。默认关闭，只对当前会话生效，不写入配置文件；新会话、子会话和进程重启后默认关闭。同会话配置 reload 不改变 debug 开关。debug 不会开启任何 Maestro evaluator，也不改变阻断语义。
 
-开启后每个实际调用显示一条简短记录，例如：
+开启后每个实际调用显示一条灰色单行记录，与 OMP 原生灰色提示一致；无标题、边框、背景或上下内边距，窄窗口中末尾省略而不折行。启动摘要和 debug 开关提示使用相同紧凑样式。例如：
 
 ```text
 [Maestro Hook] PreToolUse / knowledge-guard · 42 ms · context

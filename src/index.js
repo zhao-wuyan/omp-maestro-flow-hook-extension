@@ -2,6 +2,7 @@ import { Bridge } from './bridge.js';
 import { defaultConfigPath, initializeConfig, loadBridgeConfig } from './config.js';
 import { HookError } from './process.js';
 import { findScopedSettings } from '@oh-my-pi/pi-coding-agent/config/settings';
+import { TruncatedText } from '@oh-my-pi/pi-tui';
 import path from 'node:path';
 
 const INSTANCE = Symbol.for('omp.maestro-flow-hooks.instances');
@@ -12,6 +13,9 @@ const authorizedConfigs = globalThis[CONFIGS] ??= new Map();
 export default function maestroHooks(api) {
   api.setLabel('Maestro host hooks');
   api.registerFlag('maestro-hooks-config', { type: 'string', description: 'Absolute path to explicitly authorized Maestro bridge JSON' });
+  for (const type of ['maestro-hooks-debug', 'maestro-hooks-debug-state', 'maestro-hooks-summary']) {
+    api.registerMessageRenderer(type, (message, _options, theme) => new TruncatedText(theme.fg('dim', message.content), 1, 0));
+  }
   let bridge;
   let configFile;
   let failure;
