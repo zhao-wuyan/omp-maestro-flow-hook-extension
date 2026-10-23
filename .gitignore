@@ -1,0 +1,7 @@
+node_modules/
+.workflow/
+.jspace/
+.jspace-map.json
+.scratch/
+*.tgz
+.maestroignore

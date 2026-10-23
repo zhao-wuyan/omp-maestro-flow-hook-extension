@@ -1,0 +1,21 @@
+name: Hook compatibility
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  behavior:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated evaluator
+        run: npm install --prefix .scratch/deps maestro-flow@0.5.92
+      - name: Run real evaluator regressions
+        shell: bash
+        run: |
+          export PATH="$PWD/.scratch/deps/node_modules/.bin:$PATH"
+          npm test
