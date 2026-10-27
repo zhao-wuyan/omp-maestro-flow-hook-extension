@@ -30,7 +30,11 @@ export default function maestroHooks(api) {
   const debugSessions = new Set();
   const summarizedSessions = new Set();
   const debugEnabled = ctx => debugSessions.has(ctx.sessionManager.getSessionId());
-  const reportInvocation = ({ sessionId, event, hook, durationMs, outcome }, ctx) => {
+  const reportInvocation = ({ sessionId, event, hook, durationMs, outcome, diagnostic }, ctx) => {
+    if (diagnostic) {
+      api.logger.warn('Maestro hook timeout', diagnostic);
+      ctx.ui.notify(`[Maestro Hook] ${event} / ${hook} · ${diagnostic.durationMs} ms · timeout ${diagnostic.timeoutMs} ms (${diagnostic.scope}; hook ${diagnostic.hookBudgetMs} ms / event ${diagnostic.eventBudgetMs} ms) · ${diagnostic.action}`, 'warning');
+    }
     if (!debugSessions.has(sessionId)) return;
     // triggerTurn:false 在宿主忙碌时仍会进入 steer 队列；调试输出只能走被动 UI 通知。
     ctx.ui.notify(`[Maestro Hook] ${event} / ${hook} · ${durationMs} ms · ${outcome}`, 'info');
@@ -57,6 +61,8 @@ export default function maestroHooks(api) {
 
   const fail = (error, ctx) => {
     const kind = error instanceof HookError ? error.kind : 'config';
+    // 超时已由调用诊断记录并告警；不污染会话级失败状态，守卫仅拒绝当前操作。
+    if (kind === 'timeout' && error.diagnostic) return error.message;
     // 只记录错误类型；不记录配置原文、prompt、stdout 或工具参数。
     const detail = error instanceof HookError ? error.message : 'Cannot load the authorized JSON configuration or Maestro installation';
     failure = `Maestro hook infrastructure error (${kind}): ${detail}. Run /maestro-hooks status or reload.`;
@@ -160,7 +166,7 @@ export default function maestroHooks(api) {
         const result = await bridge.lifecycle('UserPromptSubmit', ctx, { prompt: event.prompt, user_prompt: event.prompt }, shuttingDown.signal);
         promptContext = result.context;
         if (result.blocked) failure = result.reason;
-      } catch (error) { fail(error, ctx); }
+      } catch (error) { fail(error, ctx); ctx.abort(); return; }
     }
     if (ignoredExtensionPrompts) ignoredExtensionPrompts--;
     const context = [promptContext, deferredContext].filter(Boolean).join('\n\n');
@@ -226,6 +232,7 @@ export default function maestroHooks(api) {
         debug: debugEnabled(ctx),
         maestroVersion: config?.runtime?.version ?? null,
         hooks: config?.hooks ?? [], counts: bridge?.counts ?? {}, error: failure ?? null,
+        lastTimeout: bridge?.lastTimeout ?? null,
         disabledReason: config?.reason ?? null, nativeOverlap: failure?.includes('conflict') ? 'conflict' : 'none detected',
       }, null, 2) }, { triggerTurn: false });
     },

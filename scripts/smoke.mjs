@@ -29,6 +29,8 @@ await writeFile(bridgeFile, JSON.stringify({ version: 1, source: { kind: 'claude
 let calls = 0;
 let repairMode = false;
 let repairCalls = 0;
+let timeoutMode = false;
+let timeoutCalls = 0;
 const requests = [];
 const server = createServer(async (req, res) => {
   let body = '';
@@ -37,7 +39,14 @@ const server = createServer(async (req, res) => {
   requests.push(payload);
   let delta;
   let finish;
-  if (repairMode && repairCalls++ === 0) {
+  if (timeoutMode && timeoutCalls++ === 0) {
+    delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'timeout-guard', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: `node -e "require('fs').writeFileSync('timeout-blocked-marker','bad')"` }) } }] };
+    finish = 'tool_calls';
+  } else if (timeoutMode && timeoutCalls === 2) {
+    delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'timeout-write', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: path.join(workspace, 'timeout-result.txt'), content: 'Tools survive hook timeout' }) } }] };
+    finish = 'tool_calls';
+  } else if (timeoutMode) { delta = { role: 'assistant', content: 'Timeout-isolated turn completed.' }; finish = 'stop'; }
+  else if (repairMode && repairCalls++ === 0) {
     delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'repair-write', type: 'function', function: { name: 'write', arguments: JSON.stringify({ path: path.join(workspace, 'repair.txt'), content: 'AI can repair missing Maestro' }) } }] };
     finish = 'tool_calls';
   } else if (repairMode && repairCalls === 2) {
@@ -286,7 +295,66 @@ try {
   const repairedFrame = await waitFor(frame => frame.type === 'message_end' && frame.message.customType === 'maestro-hooks-status');
   assert.equal(JSON.parse(repairedFrame.message.content).enabled, true, 'Reload must restore hooks after CLI repair');
   await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'repair-reload');
-  console.log(JSON.stringify({ result: 'PASS', omp: 'actual process with project-local installed manifest', evaluator: 'actual Maestro CLI', provider: 'local deterministic HTTP fixture; not a real LLM', trustedKnowledgeContext: true, toolExecuted: true, toolBlocked: true, userPromptExactlyOnce: true, stopExactlyOnce: true, startupResumeMatchers: true, configurationRecovery: true, printPromptGuard: true, stableSystemPrefix: true, appendOnlyDynamicContext: true, contextHistoryResume: true, initializationAndRestart: true, missingCliConversationAndTools: true, missingCliReloadRecovery: true, modelRequests: calls }, null, 2));
+  await stop();
+  repairMode = false;
+  timeoutMode = true;
+  // 真实 Maestro 子进程使用 1 ms 预算注入超时，不延迟或改写 evaluator。
+  const timed = name => ({ type: 'command', command: `maestro hooks run ${name}`, timeout: 0.001 });
+  await writeFile(sourceFile, JSON.stringify({ hooks: {
+    SessionStart: [{ hooks: [timed('session-context')] }],
+    UserPromptSubmit: [{ hooks: [timed('skill-context')] }],
+    PreToolUse: [{ matcher: 'Bash', hooks: [timed('workflow-guard')] }],
+    PostToolUse: [{ matcher: 'Write', hooks: [timed('delegate-monitor')] }],
+    Stop: [{ hooks: [timed('telemetry')] }],
+  } }));
+  await writeFile(initialized.configuration, JSON.stringify({ version: 1, source: { kind: 'claude', path: sourceFile } }));
+  await launch();
+  const timeoutStart = requests.length;
+  const timeoutStartup = await status('timeout-startup-status');
+  assert.equal(timeoutStartup.enabled, true);
+  assert.equal(timeoutStartup.lastTimeout.hook, 'session-context');
+  frames.length = 0;
+  send({ id: 'timeout-turn', type: 'prompt', message: 'Exercise guarded and unguarded tools under hook timeout.' });
+  await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'timeout-turn', 45000);
+  await assert.rejects(readFile(path.join(workspace, 'timeout-blocked-marker')), { code: 'ENOENT' });
+  assert.equal(await readFile(path.join(workspace, 'timeout-result.txt'), 'utf8'), 'Tools survive hook timeout');
+  assert(requests.at(-1).messages.some(message => message.role === 'tool' && /PreToolUse \/ workflow-guard.*block-current/.test(JSON.stringify(message.content))), 'Guard timeout must block only its tool with actionable diagnostics');
+  assert.equal(requests.length - timeoutStart, 3, 'Optional timeout notifications must not schedule extra turns');
+  const timeoutNotices = frames.filter(frame => frame.type === 'extension_ui_request' && frame.method === 'notify').map(frame => frame.message);
+  for (const [phase, name] of [['UserPromptSubmit', 'skill-context'], ['PreToolUse', 'workflow-guard'], ['PostToolUse', 'delegate-monitor'], ['Stop', 'telemetry']]) {
+    assert(timeoutNotices.some(message => message.includes(`${phase} / ${name}`) && message.includes('timeout 1 ms')), `Missing timeout diagnostic: ${phase} / ${name}`);
+  }
+  frames.length = 0;
+  const timeoutState = await status('timeout-status');
+  assert.equal(timeoutState.enabled, true);
+  assert.equal(timeoutState.error, null, 'Timeout must not latch a session failure');
+  assert.equal(timeoutState.lastTimeout.hook, 'telemetry');
+  assert.equal(timeoutState.lastTimeout.action, 'warn-and-continue');
+  frames.length = 0;
+  send({ id: 'timeout-next-turn', type: 'prompt', message: 'Continue without reloading the bridge.' });
+  await waitFor(frame => frame.type === 'prompt_result' && frame.id === 'timeout-next-turn', 45000);
+  assert.equal(requests.length - timeoutStart, 4, 'Next user prompt must work without reload after all timeout phases');
+  assert(frames.some(frame => frame.type === 'message_end' && frame.message.role === 'assistant' && JSON.stringify(frame.message.content).includes('Timeout-isolated turn completed.')));
+  await stop();
+  await writeFile(sourceFile, JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [timed('prompt-guard')] }] } }));
+  await launch();
+  const guardedPromptStart = requests.length;
+  send({ id: 'timed-prompt-guard', type: 'prompt', message: 'This submission must wait for its guard.' });
+  await waitFor(frame => frame.id === 'timed-prompt-guard' && (frame.type === 'prompt_result' || (frame.type === 'response' && frame.data?.agentInvoked === false)), 45000);
+  assert.equal(requests.length, guardedPromptStart, 'Prompt guard timeout must prevent the provider request');
+  assert(frames.some(frame => frame.type === 'extension_ui_request' && frame.method === 'notify' && /UserPromptSubmit \/ prompt-guard.*block-current/.test(frame.message)));
+  frames.length = 0;
+  const promptTimeoutState = await status('prompt-timeout-status');
+  assert.equal(promptTimeoutState.enabled, true);
+  assert.equal(promptTimeoutState.error, null);
+  assert.equal(promptTimeoutState.lastTimeout.hook, 'prompt-guard');
+  await stop();
+  const guardedPrint = spawn(process.env.OMP_BINARY || 'omp', ['--print', '--model', 'maestro-smoke/smoke', '--no-skills', '--no-rules', '--no-lsp', '--no-title', '--no-tools', '--cwd', workspace, 'Exercise the prompt guard timeout in print mode.'], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  guardedPrint.stdout.resume();
+  guardedPrint.stderr.resume();
+  await new Promise((resolve, reject) => { guardedPrint.once('error', reject); guardedPrint.once('close', resolve); });
+  assert.equal(requests.length, guardedPromptStart, 'Print prompt guard timeout must prevent the provider request');
+  console.log(JSON.stringify({ result: 'PASS', omp: 'actual process with project-local installed manifest', evaluator: 'actual Maestro CLI', provider: 'local deterministic HTTP fixture; not a real LLM', trustedKnowledgeContext: true, toolExecuted: true, toolBlocked: true, userPromptExactlyOnce: true, stopExactlyOnce: true, startupResumeMatchers: true, configurationRecovery: true, printPromptGuard: true, stableSystemPrefix: true, appendOnlyDynamicContext: true, contextHistoryResume: true, initializationAndRestart: true, missingCliConversationAndTools: true, missingCliReloadRecovery: true, timeoutDiagnostics: true, timeoutGuardBlocksCurrent: true, timeoutOptionalContinues: true, timeoutNextTurnWithoutReload: true, timeoutPromptGuardBlocksRequest: true, modelRequests: calls }, null, 2));
 } finally {
   await stop();
   await new Promise(resolve => server.close(resolve));

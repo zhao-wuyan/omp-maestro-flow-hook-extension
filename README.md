@@ -250,12 +250,14 @@ omp plugin list --local
 - `cwd` 来自事件会话；`session_id` 使用真实 OMP session ID，主／子会话隔离，恢复稳定，与 Maestro 通知文件关联一致。
 - 顶层／嵌套 `additionalContext`、嵌套 `updatedInput`、顶层／嵌套 `permissionDecision`、`decision`／`reason`、退出码 2 生效。告警不升级为阻断；其他非零退出为基础设施错误，不冒充业务拒绝。`ask` 没有足够宿主协议时明确报错。
 - Maestro CLI 不在 PATH、配置中的安装路径已失效或 Node 无法启动时，会话启动时显示并保存一条告警，暂停 Maestro 桥接；**正常对话和所有工具继续工作**，方便让 AI 安装或修复依赖。状态显示 `enabled: false`、`disabledReason`，不伪装 Hook 已运行，也不逐条消息重复告警。修复后执行 `/maestro-hooks reload` 恢复；不自动安装依赖或改写配置。
-- 上述依赖缺失以外的基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。真实 evaluator 的退出码 2／明确 deny 仍阻断工具，不因缺失依赖降级策略而放行。已执行的 PostToolUse 不能回滚，错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
+- 配置、冲突、协议和非零退出等基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。Hook 调用超时按下述职责隔离，不写入会话级失败状态。真实 evaluator 的退出码 2／明确 deny 仍按原语义阻断，不因超时隔离而放行。已执行的 PostToolUse 不能回滚，非超时错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
 - 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期的稳定启动策略使用 `systemPrompt`，动态上下文使用宿主可信 agent 消息追加到历史，不调用 `sendMessage` 排入 steer 队列。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
 - 原生 `claudeHooks.enabled` 打开即报冲突，不静默叠加；同会话重复插件实例也拒绝。不能识别任意第三方手写扩展的行为，不声称能检测所有外部桥接。
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。
+- 超时分级：`prompt-guard`、`workflow-guard`、`preflight-guard`、`spec-validator`、`knowledge-guard` 及未知 Hook 默认拒绝当前操作；提示守卫超时拒绝本次用户提交（含 print/json）。上下文、规范注入、通知及维护 Hook（`session-context`、`kg-auto-init`、`search-daemon-start`、`spec-injector`、`skill-context`、`keyword-spec-injector`、`kg-sync`、`delegate-monitor`、`search-cache-invalidator`、`team-monitor`、`telemetry`、`coordinator-tracker`）超时后明确告警并继续后续 Hook；不伪装为成功、不自动重试、不增加预算。事件总预算耗尽时，后续 Hook 不再启动，但守卫仍拒绝当前操作，不因前面的可选 Hook 耗尽预算而绕过。后续工具和用户请求可正常重新评估，无需 reload。
+- 超时不论 debug 是否开启都通过被动 UI 通知和结构化日志报告；`/maestro-hooks status` 的 `lastTimeout` 保留最近一次记录（reload 后清空）：`sessionId`、`event`、`hook`、`durationMs`、实际 `timeoutMs`、`hookBudgetMs`、`eventBudgetMs`、限制来源 `scope: hook|event` 及动作 `action: block-current|warn-and-continue`。不保存 prompt、工具参数或 stdout；进程树清理耗时可能使实际耗时超过预算。
 - 取消：Stop 使用事件 signal；session shutdown／agent end 中止仍运行的工具 Hook。当前 OMP 没有给普通事件公开每次调用的 AbortSignal；用户取消到 `agent_end` 之前存在有限延迟，最多受上述预算约束。Maestro 自己有意启动的后台搜索服务不作为孤儿进程杀掉。
-- 插件日志只记录错误类型，不记录 prompt、密钥、stdout 或完整工具输入。Maestro 自己的分析／日志／通知副作用仍按原实现保存，使用前应检查其配置。
+- 普通错误日志只记录错误类型；超时另外记录上述有界诊断字段，不记录 prompt、密钥、stdout 或完整工具输入。Maestro 自己的分析／日志／通知副作用仍按原实现保存，使用前应检查其配置。
 - 当前 Maestro evaluator 不需要 `transcript_path`，不生成伪 transcript，也不创建持久敏感副本。工具响应投影为对象，不把 content 数组当作 Claude response；当前 delegate-monitor 实际只读 session 通知，不读取 tool_response。
 
 ## 验证与已知限制
@@ -267,6 +269,8 @@ npm pack --dry-run
 ```
 
 `npm test` 使用真实本机 Maestro evaluator，覆盖告警、阻断、通知隔离／读一次、批量及默认单任务规范注入、协议／命令边界、超时／取消／输出限制。`smoke` 自动创建临时隔离目录，真实项目级安装插件并启动 OMP RPC／print，使用本地确定性 HTTP provider 驱动真实工具；另外验证不同提示产生的动态上下文不会改写 system 和已有请求消息前缀、普通下一轮保留历史、追加不同告警以及重启恢复保留。结束后清理目录，不使用用户模型凭据或改写用户配置；不将请求前缀稳定等同于真实上游缓存命中。
+
+超时回归使用真实子进程注入超时，覆盖守卫阻断、后续调用恢复、事件预算耗尽、取消优先与协议错误不降级。smoke 另外给真实 Maestro 子进程设置 1 ms 的测试预算，验证启动／提示／工具前后／Stop 超时、当前工具阻断、后续工具可执行、状态诊断和无需 reload 的下一轮；不将故障注入当作 evaluator 已成功执行业务。
 
 已实测：Windows x64，OMP 二进制 `18.12.6`，Maestro `0.5.92`，Node `24.22.1`。接口对照本机 npm 源码 `18.12.4` 及上游 `v18.12.6`。macOS／Linux 尚未实机验证；已提供三平台 CI 回归矩阵，但未把未执行的 CI 当作通过。
 

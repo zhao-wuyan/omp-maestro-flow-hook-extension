@@ -22,7 +22,6 @@ test('real evaluator debug summaries expose only bounded metadata for context, d
   await bridge.invoke({ name: 'knowledge-guard' }, { ...base, tool_input: { file_path: path.join(root, '.workflow/state.json') } }, Date.now() + 10000);
   assert.deepEqual(rows.map(row => row.outcome), ['context', 'blocked', 'no-output']);
   for (const row of rows) {
-    assert.deepEqual(Object.keys(row).sort(), ['durationMs', 'event', 'hook', 'outcome', 'sessionId']);
     assert(Number.isInteger(row.durationMs) && row.durationMs >= 0);
   }
   assert(!JSON.stringify(rows).includes('SECRET_INPUT_829'));

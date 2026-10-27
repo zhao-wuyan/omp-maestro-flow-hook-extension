@@ -2,6 +2,9 @@ import { compileMatcher } from './config.js';
 import { HookError, interpretOutput, runProcess } from './process.js';
 import { applyUpdate, toolResponse, toolViews } from './tools.js';
 
+// 只有已知的上下文、通知和维护 Hook 可以在超时后继续；守卫及未知 Hook 默认阻断当前操作。
+const OPTIONAL_HOOKS = new Set(['session-context', 'kg-auto-init', 'search-daemon-start', 'spec-injector', 'skill-context', 'keyword-spec-injector', 'kg-sync', 'delegate-monitor', 'search-cache-invalidator', 'team-monitor', 'telemetry', 'coordinator-tracker']);
+
 export function sessionId(ctx) {
   const id = ctx.sessionManager.getSessionId();
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new HookError('session', 'OMP did not provide a safe stable session id');
@@ -14,8 +17,12 @@ export class Bridge {
   async invoke(hook, input, deadline, signal) {
     const started = performance.now();
     let outcome = 'error';
+    const remaining = Math.max(0, deadline - Date.now());
+    const hookBudgetMs = hook.timeoutMs ?? this.config.timeoutMs;
+    const timeoutMs = Math.min(hookBudgetMs, remaining);
+    let diagnostic;
     try {
-      const remaining = deadline - Date.now();
+      if (signal?.aborted) throw new HookError('cancelled', 'Maestro hook cancelled');
       if (remaining <= 0) throw new HookError('timeout', 'Maestro event exceeded its execution budget');
       const { runtime } = this.config;
       const result = await runProcess(runtime.node, [runtime.cli, 'hooks', 'run', hook.name], {
@@ -23,7 +30,7 @@ export class Bridge {
         // 不继承另一宿主遗留的项目定位变量，工作目录由实际事件提供。
         env: { ...process.env, MAESTRO_PROJECT_ROOT: input.cwd, CLAUDE_PROJECT_DIR: input.cwd },
         input: JSON.stringify(input),
-        timeoutMs: Math.min(hook.timeoutMs ?? this.config.timeoutMs, remaining), signal,
+        timeoutMs, signal,
       });
       this.counts[hook.name] = (this.counts[hook.name] ?? 0) + 1;
       const output = interpretOutput(result, input.hook_event_name);
@@ -35,9 +42,23 @@ export class Bridge {
       return output;
     } catch (error) {
       outcome = ['timeout', 'cancelled'].includes(error.kind) ? error.kind : 'error';
+      if (error.kind === 'timeout') {
+        const action = OPTIONAL_HOOKS.has(hook.name) ? 'warn-and-continue' : 'block-current';
+        diagnostic = {
+          sessionId: input.session_id, event: input.hook_event_name, hook: hook.name,
+          durationMs: Math.round(performance.now() - started), timeoutMs, hookBudgetMs,
+          eventBudgetMs: this.config.eventBudgetMs, scope: remaining <= hookBudgetMs ? 'event' : 'hook', action,
+        };
+        this.lastTimeout = diagnostic;
+        const detail = `Maestro hook timeout: ${diagnostic.event} / ${diagnostic.hook}; elapsed ${diagnostic.durationMs} ms, limit ${timeoutMs} ms (${diagnostic.scope}), hook budget ${hookBudgetMs} ms, event budget ${diagnostic.eventBudgetMs} ms; ${action}`;
+        if (action === 'warn-and-continue') return { blocked: false, context: '' };
+        const timeout = new HookError('timeout', detail);
+        timeout.diagnostic = diagnostic;
+        throw timeout;
+      }
       throw error;
     } finally {
-      this.onInvocation?.({ sessionId: input.session_id, event: input.hook_event_name, hook: hook.name, durationMs: Math.round(performance.now() - started), outcome });
+      this.onInvocation?.({ sessionId: input.session_id, event: input.hook_event_name, hook: hook.name, durationMs: Math.round(performance.now() - started), outcome, ...(diagnostic ? { diagnostic } : {}) });
     }
   }
 
