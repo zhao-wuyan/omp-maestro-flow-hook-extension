@@ -127,12 +127,16 @@ Maestro 自身 `hooks.toggles`、`MAESTRO_HOOKS_ENABLE`／`MAESTRO_HOOKS_DISABLE
 | Maestro | OMP | 处理 |
 |---|---|---|
 | SessionStart | `session_start`、`session_switch`、`session_branch` | 启动／恢复来源区分，按 matcher 执行；主会话上下文经 `before_agent_start.systemPrompt` |
-| UserPromptSubmit | `input`；print/json 的 `before_agent_start` | 真实用户文本；排除 extension 来源及状态命令 |
+| UserPromptSubmit | `input`；print/json 的 `before_agent_start` | 真实用户文本；排除 extension 来源及状态命令；动态上下文作为隐藏的 agent-authored 消息追加到历史 |
 | PreToolUse | `tool_call` | 阻断、可信 `additionalContext`、`updatedInput` |
 | PostToolUse | `tool_result` | 仅成功结果；可信通知，不把错误当成功 |
 | Stop | `session_stop` | 仅主会话真正结束；不使用 `turn_end` 或子代理结束 |
 
 当前已知的 17 个 host Hook 全部在白名单中，包括 `coordinator-tracker` 宿主 Stop Hook；不运行 Coordinator 的 `beforeRun`、`afterRun`、`beforeNode` 等进程内 Hook。精确清单由 `/maestro-hooks status` 展示。
+
+启动上下文在当前会话运行期间保持固定，继续使用 `systemPrompt`。每轮提示与非阻断 Stop 延迟上下文通过 `before_agent_start.message` 追加，使用 `maestro-hooks-context`、`attribution: "agent"`、`display: false`，由宿主转换为可信 developer 上下文并随会话保存；无输出不追加空消息。下一轮不会删除或替换历史 Hook 上下文，恢复会话时保留已保存内容；压缩与历史裁剪仍由宿主管理。非阻断 Stop 仍等到下一次真实请求才投递，不单独触发模型。
+
+这种分离避免本轮动态 Hook 输出变化或消失时重写 system 前缀；不保证上游缓存命中率，也不消除模型／工具清单变化、恢复时启动上下文变化或服务端缓存淘汰造成的失效。
 
 `task` 映射为 Claude `Agent`，支持单任务和 `tasks[]`。按子任务执行，`agent`／`task` 投影为 `subagent_type`／`prompt`，更新精确还原，保留批次顺序及其他字段。不凭空把 OMP `task` 当作 Maestro `general-purpose`：Maestro 未映射的 agent 保持其原规则；需要自定义类别时配置 Maestro 自己的 `specInjection.mapping`。
 
@@ -220,7 +224,7 @@ omp plugin list --local
 - 顶层／嵌套 `additionalContext`、嵌套 `updatedInput`、顶层／嵌套 `permissionDecision`、`decision`／`reason`、退出码 2 生效。告警不升级为阻断；其他非零退出为基础设施错误，不冒充业务拒绝。`ask` 没有足够宿主协议时明确报错。
 - Maestro CLI 不在 PATH、配置中的安装路径已失效或 Node 无法启动时，会话启动时显示并保存一条告警，暂停 Maestro 桥接；**正常对话和所有工具继续工作**，方便让 AI 安装或修复依赖。状态显示 `enabled: false`、`disabledReason`，不伪装 Hook 已运行，也不逐条消息重复告警。修复后执行 `/maestro-hooks reload` 恢复；不自动安装依赖或改写配置。
 - 上述依赖缺失以外的基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。真实 evaluator 的退出码 2／明确 deny 仍阻断工具，不因缺失依赖降级策略而放行。已执行的 PostToolUse 不能回滚，错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
-- 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期使用 `systemPrompt`。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
+- 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期的稳定启动策略使用 `systemPrompt`，动态上下文使用宿主可信 agent 消息追加到历史，不调用 `sendMessage` 排入 steer 队列。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
 - 原生 `claudeHooks.enabled` 打开即报冲突，不静默叠加；同会话重复插件实例也拒绝。不能识别任意第三方手写扩展的行为，不声称能检测所有外部桥接。
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。
 - 取消：Stop 使用事件 signal；session shutdown／agent end 中止仍运行的工具 Hook。当前 OMP 没有给普通事件公开每次调用的 AbortSignal；用户取消到 `agent_end` 之前存在有限延迟，最多受上述预算约束。Maestro 自己有意启动的后台搜索服务不作为孤儿进程杀掉。
@@ -235,7 +239,7 @@ npm run smoke
 npm pack --dry-run
 ```
 
-`npm test` 使用真实本机 Maestro evaluator，覆盖告警、阻断、通知隔离／读一次、批量及默认单任务规范注入、协议／命令边界、超时／取消／输出限制。`smoke` 自动创建临时隔离目录，真实项目级安装插件并启动 OMP RPC／print，使用本地确定性 HTTP provider 驱动真实工具；结束后清理目录，不使用用户模型凭据或改写用户配置。
+`npm test` 使用真实本机 Maestro evaluator，覆盖告警、阻断、通知隔离／读一次、批量及默认单任务规范注入、协议／命令边界、超时／取消／输出限制。`smoke` 自动创建临时隔离目录，真实项目级安装插件并启动 OMP RPC／print，使用本地确定性 HTTP provider 驱动真实工具；另外验证不同提示产生的动态上下文不会改写 system 和已有请求消息前缀、普通下一轮保留历史、追加不同告警以及重启恢复保留。结束后清理目录，不使用用户模型凭据或改写用户配置；不将请求前缀稳定等同于真实上游缓存命中。
 
 已实测：Windows x64，OMP 二进制 `18.12.6`，Maestro `0.5.92`，Node `24.22.1`。接口对照本机 npm 源码 `18.12.4` 及上游 `v18.12.6`。macOS／Linux 尚未实机验证；已提供三平台 CI 回归矩阵，但未把未执行的 CI 当作通过。
 

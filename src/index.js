@@ -152,7 +152,7 @@ export default function maestroHooks(api) {
 
   api.on('before_agent_start', async (event, ctx) => {
     if (ctx.agent.kind !== 'main') return;
-    if (failure) { ctx.abort(); return { systemPrompt: [...event.systemPrompt, failure] }; }
+    if (failure) { ctx.abort(); return; }
     if (operation.signal.aborted) operation = new AbortController();
     // print/json 模式没有 input 事件；只处理真实 CLI 提交。
     if (['print', 'json'].includes(ctx.mode) && !ignoredExtensionPrompts && enabled(ctx)) {
@@ -163,12 +163,15 @@ export default function maestroHooks(api) {
       } catch (error) { fail(error, ctx); }
     }
     if (ignoredExtensionPrompts) ignoredExtensionPrompts--;
-    const context = [startupContext, promptContext, deferredContext, failure].filter(Boolean).join('\n\n');
-    // 原生 systemPrompt 是受信任扩展策略通道；不用普通工具输出或 user 消息伪装。
+    const context = [promptContext, deferredContext].filter(Boolean).join('\n\n');
+    // 稳定启动策略留在 system；动态上下文作为宿主可信消息追加并持久化，避免改写历史前缀。
     promptContext = '';
     deferredContext = '';
-    if (failure) ctx.abort();
-    return context ? { systemPrompt: [...event.systemPrompt, context] } : undefined;
+    if (failure) { ctx.abort(); return; }
+    return {
+      ...(startupContext ? { systemPrompt: [...event.systemPrompt, startupContext] } : {}),
+      ...(context ? { message: { customType: 'maestro-hooks-context', content: context, display: false, attribution: 'agent' } } : {}),
+    };
   });
 
   api.on('tool_call', async (event, ctx) => {
