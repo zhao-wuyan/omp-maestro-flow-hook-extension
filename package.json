@@ -1,6 +1,6 @@
 {
   "name": "omp-maestro-flow-hooks",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "OMP native Extension bridge for explicitly authorized Maestro host hooks",
   "type": "module",
   "license": "MIT",
