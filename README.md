@@ -108,19 +108,46 @@ Maestro 自身 `hooks.toggles`、`MAESTRO_HOOKS_ENABLE`／`MAESTRO_HOOKS_DISABLE
 | `standard` | 包含 `minimal`，并加入下列会话、提示、工具守卫、通知及 Stop Hook | 推荐默认，覆盖常用 Maestro 宿主能力 |
 | `full` | 包含 `standard`，再加入 `workflow-guard` 和 `prompt-guard` | 需要这两个额外守卫，并已检查 Maestro 自身开关与规则配置 |
 
-`standard` 在 `minimal` 基础上新增的完整清单：
-
-- SessionStart：`session-context`、`kg-auto-init`、`search-daemon-start`。
-- UserPromptSubmit：`skill-context`、`keyword-spec-injector`、`kg-sync`。
-- PreToolUse：`preflight-guard`、`spec-validator`、`knowledge-guard`。
-- PostToolUse：`delegate-monitor`、`search-cache-invalidator`。
-- Stop：`team-monitor`、`telemetry`、`coordinator-tracker`。
+各 Hook 的最低等级、触发时机和具体操作见下方[Hook 功能与操作一览](#hook-功能与操作一览)；`standard` 包含表中所有 `minimal`、`standard` 条目。
 
 **选择 `full` 不等于强制开启 `workflow-guard`／`prompt-guard`。** evaluator 仍遵守 Maestro 自身 toggle；关闭时可以合法 no-op。告警还是阻断也由 evaluator 决定，不由 level 决定。工作区、matcher、agent 映射等条件同样继续生效。
 
 选择 `claude`／`codex` 文件来源时，执行范围由该文件已有的 Maestro Hook 条目决定，不使用 `source.level` 再筛选，也不额外叠加 catalog。尤其 Codex 的 `minimal` 对应 SessionStart `session-context`，与上表的 Claude catalog `minimal` 不同；不要混为同一套事件。
 
 修改桥接文件后执行 `/maestro-hooks reload`，再用 `/maestro-hooks status` 确认来源及实际加载的 Hook 清单；状态中的调用次数不能证明 evaluator 没有因自身开关而 no-op。
+
+### Hook 功能与操作一览
+
+下表覆盖本插件白名单中的 **17 个宿主 Hook**，按 Maestro `0.5.92` 的 Claude host catalog 和实际 evaluator 实现核对。等级表示 catalog 模式的**最低纳入等级**，不是 Hook 自身开关；实际调用还受 matcher、工作区、Maestro 配置及冷却／去重条件限制。
+
+表中的 `Bash`、`Write`、`Edit`、`Agent` 是 Maestro 接收的工具名称；本插件将 OMP 的 `bash`、`write`、`edit`、`task` 映射到这些名称。所有 Hook 都由本插件调用原始 `maestro hooks run <名称>`，不会在插件中另行实现业务规则。
+
+| Hook | 最低等级 | 触发时机（Claude catalog） | 用途 | 实际操作与影响 |
+|---|---|---|---|---|
+| `session-context` | `standard` | SessionStart：启动、恢复 | 让主会话了解项目与已有工作 | 读取工作流状态、项目摘要、源码目录、近期 Session、可用规范和 Git 信息，注入启动上下文；可更新上下文缓存，并注册宿主会话的知识身份通道。不自动执行后续 Run。 |
+| `kg-auto-init` | `standard` | SessionStart：仅启动 | 首次初始化知识图谱 | 有 `.workflow` 且图谱尚未初始化时，创建 `.workflow/kg` 下的数据库、表结构并执行首次同步；使用锁和冷却机制。已有数据库时跳过，不修改业务源码。 |
+| `search-daemon-start` | `standard` | SessionStart：仅启动 | 预热项目知识搜索服务 | 查找 Maestro 工作区，尝试启动／复用后台搜索 daemon，维护服务描述与索引相关状态；不向模型注入正文。 |
+| `skill-context` | `standard` | UserPromptSubmit | 为 Maestro 命令补充执行上下文 | 识别 Maestro skill／命令或明确的“继续”请求，读取 canonical Session、Run、产物引用及命令配置，将上下文和用户未显式指定的配置参数注入模型；不替用户创建或推进 Run，不改写用户原文。 |
+| `keyword-spec-injector` | `standard` | UserPromptSubmit | 按当前问题召回相关知识 | 用提示词关键词匹配 Spec、领域术语及 Wiki 搜索结果，按上下文预算注入相关条目；维护会话级注入去重记录，并可记录注入统计。不是把所有规范全文每轮重发。 |
+| `kg-sync` | `standard` | UserPromptSubmit | 让已存在的知识图谱跟上项目变化 | 检查 Git 源码变化、图谱同步状态和输入新鲜度；需要更新时通常启动后台同步 worker，更新图谱及派生索引，并维护 worker 标记、同步状态和冷却记录。图谱未初始化、无变化或已有 worker 时跳过；不改写业务源码。 |
+| `spec-injector` | `minimal` | PreToolUse：`Agent` | 给子代理补充对应职责的规范 | 按 agent 类型映射读取 Spec、相关文档／Wiki 和上下文预算，将规范前置到子任务 prompt，通过 `updatedInput` 更新该任务输入；可记录注入统计及知识使用记录。未映射类型按 Maestro 规则跳过，不改变其他任务字段。 |
+| `preflight-guard` | `standard` | PreToolUse：`Bash`、`Write`、`Edit`、`Agent` | 提前发现团队并行作业冲突 | 读取成员身份、当前阶段和团队活动，检查同阶段是否有活跃队友；默认注入冲突告警，配置 `collab.preflight_mode: block` 时可阻断工具。不替团队加锁或自动合并修改。 |
+| `spec-validator` | `standard` | PreToolUse：`Write` | 检查写入的规范文件格式 | 仅检查 `.workflow/specs/` 下 Markdown 内容的 `<spec-entry>` 解析、标签闭合和文件类别匹配；当前宿主 runner 使用默认告警模式，不自动修复正文，也不是通用源码检查器。 |
+| `knowledge-guard` | `standard` | PreToolUse：`Write`、`Edit` | 提醒先查知识、遵守知识发布流程 | 直接写 `.workflow/specs/`、`.workflow/knowhow/` 时提示走知识流水线；写其他项目文件时，读取 `.workflow/learning/maestro-search.jsonl` 检查近期搜索记录，默认窗口为 30 分钟。仅告警，不阻断、不代做搜索；其他 `.workflow/` 状态写入不受该提醒约束。 |
+| `workflow-guard` | `full` | PreToolUse：`Bash`、`Write`、`Edit` | 阻止命中的危险操作或越界写入 | 按规则匹配强制推送、硬重置、危险删除、删表等输入；对 Write／Edit 还可按 `.workflow/config.json` 的 `guard` 配置检查允许／禁止目录。命中时返回阻断；它不是完整 shell／SQL 安全沙箱，也不会执行被拦截的操作。 |
+| `prompt-guard` | `full` | UserPromptSubmit | 提醒疑似提示词注入 | 扫描“忽略此前指令”、角色覆盖、编码指令等已定义模式，命中后向模型注入警告；当前实现不阻断提交、不删除或改写用户文本，未命中也不等于安全认证。 |
+| `delegate-monitor` | `standard` | PostToolUse：`Bash`、`Agent` 成功后 | 接收 Maestro 委派任务完成通知 | 读取临时目录中当前 session ID 对应的 `maestro-notify-<session_id>.jsonl`，将未读通知注入模型并标记为已读，避免重复投递；不是重新执行委派任务。 |
+| `search-cache-invalidator` | `standard` | PostToolUse：`Write`、`Edit` 成功后 | 避免知识文件更新后仍搜到旧内容 | 仅在目标为 `.workflow` 的 Spec、Knowhow、Issue、Domain、Scratch、`project.md` 或 `roadmap.md` 时，使搜索缓存／索引失效并请求后台重建，必要时尝试启动 daemon；普通源码写入不触发这项操作。 |
+| `team-monitor` | `standard` | Stop | 向团队报告本次会话活动 | 团队身份存在时，以 `turn_complete` 为动作记录成员、主机及阶段／任务活动，写入 `.workflow/collab/activity.jsonl`，并维护临时去重记录；短时间相同活动可跳过。无团队身份时静默，不阻断、不要求模型继续回答。 |
+| `telemetry` | `standard` | Stop | 记录一次完成事件 | 向系统临时目录的 `maestro-telemetry-<session_id>.jsonl` 追加 `turn_complete` 和时间戳；此 runner 不写回复正文，也没有网络上报操作。不阻断、不注入续轮指令。 |
+| `coordinator-tracker` | `standard` | Stop | 关联宿主会话与 Maestro 编排状态 | 读取工作区的 Maestro Session／编排状态，更新临时会话桥接文件，并将知识身份通道绑定到解析出的 Maestro Session；没有可用状态时跳过。不调用 `run next`，不自行推进编排或要求模型重答。 |
+
+**使用边界：**
+
+- 这是 Claude catalog 表；`source.kind: "codex"` 时遵守 Codex 文件事件，例如 `spec-injector` 在 SessionStart 注入主会话上下文，而不是改写 `task`；`preflight-guard`、`workflow-guard` 的 catalog matcher 仅为 `Bash`，`delegate-monitor` 也仅匹配 `Bash`。
+- “注入”意味着内容会进入模型上下文；“后台／写入”意味着可能只更新本地状态而没有 stdout。debug 的 `no-output` 不等于没有副作用，也不等于一定完成了同步。
+- 除表中各自的操作外，Maestro 可按自身配置记录 Hook 调用／注入统计。插件 debug 只走被动 UI 提示，不把调试文字排入模型续轮队列。
+
 
 ## 事件覆盖
 
