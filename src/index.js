@@ -1,5 +1,5 @@
 import { Bridge } from './bridge.js';
-import { defaultConfigPath, initializeConfig, loadBridgeConfig } from './config.js';
+import { defaultConfigPath, initializeConfig, initializeLearning, loadBridgeConfig } from './config.js';
 import { HookError } from './process.js';
 import { findScopedSettings } from '@oh-my-pi/pi-coding-agent/config/settings';
 import { TruncatedText } from '@oh-my-pi/pi-tui';
@@ -125,6 +125,11 @@ export default function maestroHooks(api) {
     promptContext = '';
     deferredContext = '';
     if (!enabled(ctx)) return;
+    try { await initializeLearning(ctx.cwd); }
+    catch (error) {
+      api.logger.warn('Maestro search ledger directory initialization failed', { code: error.code });
+      ctx.ui.notify('Cannot initialize .workflow/learning; Maestro search usage may not be recorded. Check workspace permissions and directory conflicts.', 'warning');
+    }
     try {
       const result = await bridge.lifecycle('SessionStart', ctx, { source }, shuttingDown.signal);
       startupContext = result.context;

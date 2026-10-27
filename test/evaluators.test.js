@@ -188,3 +188,17 @@ test('real spec-injector rewrites a single task using the explicit default-agent
   }
   assert.deepEqual(input, original, 'single-task projection must not mutate the incoming event');
 });
+
+test('internal xd writes bypass file hooks while local and remote files remain guarded', async t => {
+  const root = await workspace(t);
+  const guard = bridge('knowledge-guard');
+  for (const file of ['xd://report_issue', 'xd://lsp']) {
+    const result = await guard.tool(event('write', { path: file, content: '{}' }), context(root), 'PreToolUse');
+    assert.equal(result.additionalContext, undefined);
+    assert.equal(result.block, undefined);
+  }
+  for (const file of ['src/example.js', 'local://example.js', 'ssh://host/project/example.js', 'C:/project/example.js']) {
+    const result = await guard.tool(event('write', { path: file, content: '{}' }), context(root), 'PreToolUse');
+    assert.match(result.additionalContext, /KnowledgeGuard/);
+  }
+});

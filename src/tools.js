@@ -4,6 +4,8 @@ export const TOOL_NAMES = { bash: 'Bash', write: 'Write', edit: 'Edit', read: 'R
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export function toolViews(toolName, input) {
+  // xd 是工具设备调用，不是文件写入；local/ssh 等文件资源仍走原守卫。
+  if (toolName === 'write' && typeof input.path === 'string' && /^xd:\/\//i.test(input.path)) return [];
   const name = TOOL_NAMES[toolName] ?? toolName;
   if (toolName === 'task') {
     const tasks = Array.isArray(input.tasks) ? input.tasks : [input];

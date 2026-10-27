@@ -146,6 +146,8 @@ Maestro 自身 `hooks.toggles`、`MAESTRO_HOOKS_ENABLE`／`MAESTRO_HOOKS_DISABLE
 
 - 这是 Claude catalog 表；`source.kind: "codex"` 时遵守 Codex 文件事件，例如 `spec-injector` 在 SessionStart 注入主会话上下文，而不是改写 `task`；`preflight-guard`、`workflow-guard` 的 catalog matcher 仅为 `Bash`，`delegate-monitor` 也仅匹配 `Bash`。
 - “注入”意味着内容会进入模型上下文；“后台／写入”意味着可能只更新本地状态而没有 stdout。debug 的 `no-output` 不等于没有副作用，也不等于一定完成了同步。
+- 插件启用后的主会话启动／恢复／reload 时，仅在当前 cwd 的 `.workflow` 已是目录时幂等创建 `.workflow/learning`，兼容 Maestro `0.5.92` 搜索记账不创建父目录的问题；不创建 `.workflow`、不覆盖内容、不预写搜索时间。创建失败在 UI／日志中告警。仍须真实执行搜索；空结果或仅全局模板等未被上游记账的搜索不因此伪装为已记录。
+- `write xd://...` 是内部工具设备调用，不投影成 Claude 文件 Write，因此不触发文件守卫和文件变更维护 Hook。普通路径、Windows 路径及 `local://`、`ssh://` 文件资源仍按原规则检查；不按“所有 URI”一概豁免。
 - 除表中各自的操作外，Maestro 可按自身配置记录 Hook 调用／注入统计。插件 debug 只走被动 UI 提示，不把调试文字排入模型续轮队列。
 
 

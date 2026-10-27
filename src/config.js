@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { HookError } from './process.js';
 import { resolveRuntime } from './runtime.js';
@@ -87,6 +87,21 @@ export async function initializeConfig(file) {
   } catch (error) {
     if (error.code === 'EEXIST') return { created: false, file };
     throw error;
+  }
+}
+
+export async function initializeLearning(cwd) {
+  const workflow = path.join(cwd, '.workflow');
+  try {
+    if (!(await stat(workflow)).isDirectory()) return;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return;
+    throw error;
+  }
+  // 不递归创建父目录：普通项目不会因此获得 .workflow，也不伪造搜索记录。
+  try { await mkdir(path.join(workflow, 'learning')); }
+  catch (error) {
+    if (error.code !== 'EEXIST' || !(await stat(path.join(workflow, 'learning'))).isDirectory()) throw error;
   }
 }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,6 +126,8 @@ try {
   await launch();
   const initial = await status('initial');
   assert.equal(initial.enabled, true, JSON.stringify(initial));
+  assert((await stat(path.join(workspace, '.workflow/learning'))).isDirectory(), 'Enabled session must initialize learning only inside the existing workflow');
+  await assert.rejects(readFile(path.join(workspace, '.workflow/learning/maestro-search.jsonl')), { code: 'ENOENT' });
   assert.equal(initial.counts['session-context'], 1);
   assert.equal(initial.counts['kg-auto-init'], 1);
   send({ id: 'startup-summary', type: 'get_messages' });
