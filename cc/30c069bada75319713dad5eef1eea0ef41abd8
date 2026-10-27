@@ -1,0 +1,22 @@
+README.md
+  h_b23cf7c6b3692f 253,257-258,260,273-274
+scripts/smoke.mjs
+  h_b23cf7c6b3692f 32-33,42-49,298-357
+src/bridge.js
+  h_b23cf7c6b3692f 5-7,20-23,25,33,45-58,61
+src/index.js
+  h_b23cf7c6b3692f 33-37,64-65,169,235
+test/timeouts.test.js
+  h_b23cf7c6b3692f 1-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc30c069bada75319713dad5eef1eea0ef41abd8",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
