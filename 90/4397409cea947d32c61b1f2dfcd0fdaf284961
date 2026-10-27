@@ -1,0 +1,14 @@
+README.md
+  h_b23cf7c6b3692f 111,119-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "904397409cea947d32c61b1f2dfcd0fdaf284961",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
