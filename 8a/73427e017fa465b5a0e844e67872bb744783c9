@@ -1,0 +1,28 @@
+README.md
+  h_b23cf7c6b3692f 149-150
+package.json
+  h_b23cf7c6b3692f 3
+scripts/smoke.mjs
+  h_b23cf7c6b3692f 4,129-130
+src/config.js
+  h_b23cf7c6b3692f 1,93-107
+src/index.js
+  h_b23cf7c6b3692f 2,128-132
+src/tools.js
+  h_b23cf7c6b3692f 7-8
+test/evaluators.test.js
+  h_b23cf7c6b3692f 191-204
+test/init.test.js
+  h_b23cf7c6b3692f 3,6,27-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a73427e017fa465b5a0e844e67872bb744783c9",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
