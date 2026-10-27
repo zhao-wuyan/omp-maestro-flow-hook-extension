@@ -1,0 +1,14 @@
+package.json
+  h_b23cf7c6b3692f 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "124f1613babb32067b7ad560851c85327e64bc25",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
