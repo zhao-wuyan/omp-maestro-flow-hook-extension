@@ -1,0 +1,18 @@
+README.md
+  h_b23cf7c6b3692f 130,137-140,227,242
+scripts/smoke.mjs
+  h_b23cf7c6b3692f 197-240,289
+src/index.js
+  h_b23cf7c6b3692f 155,166-167,170-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b8ab26f99472f292b236ad6ac00a605033355cd",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
