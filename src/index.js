@@ -1,6 +1,7 @@
 import { Bridge } from './bridge.js';
 import { defaultConfigPath, initializeConfig, initializeLearning, loadBridgeConfig } from './config.js';
 import { HookError } from './process.js';
+import { InitializationRetry } from './retry.js';
 import { findScopedSettings } from '@oh-my-pi/pi-coding-agent/config/settings';
 import { TruncatedText } from '@oh-my-pi/pi-tui';
 import path from 'node:path';
@@ -29,6 +30,13 @@ export default function maestroHooks(api) {
   let operation = new AbortController();
   const debugSessions = new Set();
   const summarizedSessions = new Set();
+  const initializationRetries = new Map();
+  const retrying = new Map();
+  const retryState = ctx => {
+    const id = ctx.sessionManager.getSessionId();
+    if (!initializationRetries.has(id)) initializationRetries.set(id, new InitializationRetry());
+    return initializationRetries.get(id);
+  };
   const debugEnabled = ctx => debugSessions.has(ctx.sessionManager.getSessionId());
   const reportInvocation = ({ sessionId, event, hook, durationMs, outcome, diagnostic }, ctx) => {
     if (diagnostic) {
@@ -44,7 +52,7 @@ export default function maestroHooks(api) {
     const id = ctx.sessionManager.getSessionId();
     if (summarizedSessions.has(id)) return;
     summarizedSessions.add(id);
-    if (failure || bridge?.config.reason?.startsWith('Maestro is unavailable:')) return;
+    if (failure || bridge?.config.reason?.startsWith('Maestro hook initialization failed')) return;
     const config = bridge?.config;
     const source = config?.source;
     const content = config?.enabled
@@ -80,7 +88,9 @@ export default function maestroHooks(api) {
     if (enabled) throw new HookError('conflict', 'Native Claude hooks are enabled; disable the native bridge or this extension, not both together');
   };
 
-  async function reload(ctx) {
+  async function reload(ctx, automatic = false) {
+    const retry = retryState(ctx);
+    if (!automatic) retry.reset();
     bridge = undefined;
     failure = undefined;
     startupContext = '';
@@ -100,13 +110,17 @@ export default function maestroHooks(api) {
       ownedSessions.add(id);
       authorizedConfigs.set(ctx.cwd, configFile);
       bridge = new Bridge(config, row => reportInvocation(row, ctx));
+      retry.reset();
     } catch (error) {
-      if (error instanceof HookError && error.kind === 'unavailable') {
-        const reason = `Maestro is unavailable: ${error.message}. Maestro hooks are suspended; conversation and tools remain available. Install or repair Maestro, then run /maestro-hooks reload.`;
-        bridge = new Bridge({ enabled: false, hooks: [], reason });
-        api.logger.warn('Maestro hook bridge suspended', { kind: error.kind });
-        api.sendMessage({ customType: 'maestro-hooks-warning', display: true, content: reason }, { triggerTurn: false });
-      } else fail(error, ctx);
+      const kind = error instanceof HookError ? error.kind : 'config';
+      const detail = error instanceof HookError ? error.message : 'Cannot load the authorized JSON configuration or Maestro installation';
+      retry.failed();
+      const policy = retry.status().remaining ? 'Automatic recovery waits for 3/6/12 completed tools or 3/6/12 minutes (maximum 3 retries).' : 'Automatic recovery exhausted after 3 retries.';
+      const reason = `Maestro hook initialization failed (${kind}): ${detail}. Hooks are disabled for this session; conversation and tools remain available. ${policy} Run /maestro-hooks reload to try again now.`;
+      bridge = new Bridge({ enabled: false, hooks: [], reason });
+      if (error.diagnostic) bridge.lastTimeout = { ...error.diagnostic, sessionId: ctx.sessionManager.getSessionId() };
+      api.logger.warn('Maestro hook bridge suspended', { kind, ...(bridge.lastTimeout ? { diagnostic: bridge.lastTimeout } : {}) });
+      api.sendMessage({ customType: 'maestro-hooks-warning', display: true, content: reason }, { triggerTurn: false });
     }
   }
 
@@ -137,6 +151,21 @@ export default function maestroHooks(api) {
     } catch (error) { fail(error, ctx); }
   }
 
+  async function retryInitialization(ctx) {
+    if (ctx.agent.kind !== 'main' || shuttingDown.signal.aborted) return;
+    const id = ctx.sessionManager.getSessionId();
+    if (retrying.has(id)) return retrying.get(id);
+    if (!retryState(ctx).takeDue()) return;
+    const pending = (async () => {
+      await reload(ctx, true);
+      await start(ctx, 'resume');
+      if (bridge?.config.enabled && !failure) ctx.ui.notify('Maestro hooks recovered after initialization failure.', 'info');
+    })();
+    retrying.set(id, pending);
+    try { await pending; }
+    finally { retrying.delete(id); }
+  }
+
   api.on('session_start', async (_event, ctx) => {
     await reload(ctx);
     const source = process.argv.some(arg => ['--resume', '-r', '--continue', '-c', '--restore'].includes(arg) || /^--(?:resume|restore)=/.test(arg)) || ctx.sessionManager.getEntries().some(entry => entry.type === 'message') ? 'resume' : 'startup';
@@ -151,6 +180,7 @@ export default function maestroHooks(api) {
     if (/^\/maestro-hooks(?:\s|$)/.test(event.text.trim())) return;
     if (event.source === 'extension') { ignoredExtensionPrompts++; return; }
     if (ctx.agent.kind !== 'main') return;
+    await retryInitialization(ctx);
     promptContext = '';
     if (failure) { ctx.ui.notify(failure, 'error'); return { handled: true }; }
     if (!enabled(ctx)) return failure ? { handled: true } : undefined;
@@ -163,6 +193,7 @@ export default function maestroHooks(api) {
 
   api.on('before_agent_start', async (event, ctx) => {
     if (ctx.agent.kind !== 'main') return;
+    if (['print', 'json'].includes(ctx.mode) && !ignoredExtensionPrompts) await retryInitialization(ctx);
     if (failure) { ctx.abort(); return; }
     if (operation.signal.aborted) operation = new AbortController();
     // print/json 模式没有 input 事件；只处理真实 CLI 提交。
@@ -186,6 +217,7 @@ export default function maestroHooks(api) {
   });
 
   api.on('tool_call', async (event, ctx) => {
+    await retryInitialization(ctx);
     if (failure) return { block: true, reason: failure };
     if (!enabled(ctx)) return failure ? { block: true, reason: failure } : undefined;
     const signal = AbortSignal.any([operation.signal, shuttingDown.signal]);
@@ -193,6 +225,7 @@ export default function maestroHooks(api) {
     catch (error) { return { block: true, reason: signal.aborted ? 'Maestro hook cancelled' : fail(error, ctx) }; }
   });
   api.on('tool_result', async (event, ctx) => {
+    if (ctx.agent.kind === 'main') retryState(ctx).toolCompleted();
     if (!enabled(ctx) || event.isError) return;
     const signal = AbortSignal.any([operation.signal, shuttingDown.signal]);
     try { return await bridge.tool(event, ctx, 'PostToolUse', signal); }
@@ -238,6 +271,7 @@ export default function maestroHooks(api) {
         maestroVersion: config?.runtime?.version ?? null,
         hooks: config?.hooks ?? [], counts: bridge?.counts ?? {}, error: failure ?? null,
         lastTimeout: bridge?.lastTimeout ?? null,
+        initializationRetry: retryState(ctx).status(),
         disabledReason: config?.reason ?? null, nativeOverlap: failure?.includes('conflict') ? 'conflict' : 'none detected',
       }, null, 2) }, { triggerTurn: false });
     },

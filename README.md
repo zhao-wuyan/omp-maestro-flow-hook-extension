@@ -251,8 +251,9 @@ omp plugin list --local
 
 - `cwd` 来自事件会话；`session_id` 使用真实 OMP session ID，主／子会话隔离，恢复稳定，与 Maestro 通知文件关联一致。
 - 顶层／嵌套 `additionalContext`、嵌套 `updatedInput`、顶层／嵌套 `permissionDecision`、`decision`／`reason`、退出码 2 生效。告警不升级为阻断；其他非零退出为基础设施错误，不冒充业务拒绝。`ask` 没有足够宿主协议时明确报错。
-- Maestro CLI 不在 PATH、配置中的安装路径已失效或 Node 无法启动时，会话启动时显示并保存一条告警，暂停 Maestro 桥接；**正常对话和所有工具继续工作**，方便让 AI 安装或修复依赖。状态显示 `enabled: false`、`disabledReason`，不伪装 Hook 已运行，也不逐条消息重复告警。修复后执行 `/maestro-hooks reload` 恢复；不自动安装依赖或改写配置。
-- 配置、冲突、协议和非零退出等基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。Hook 调用超时按下述职责隔离，不写入会话级失败状态。真实 evaluator 的退出码 2／明确 deny 仍按原语义阻断，不因超时隔离而放行。已执行的 PostToolUse 不能回滚，非超时错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
+- 初始化加载 Hook 目录的子进程预算为 10 秒。初始化失败（包括缺少依赖、配置错误和超时）仅暂停当前会话的 Maestro Hook，显示并保存具体关闭原因；**正常对话和所有工具继续工作**，不写入会话级阻断错误，不伪装 Hook 已运行。超时的 `lastTimeout` 记录 `phase: initialization`、`operation: load-hook-catalog`、耗时、10000 ms 预算及 `action: disable-session-hooks`。
+- 初始化失败后最多自动重试 3 次：每次失败后分别等待 3／6／12 次工具调用完成，或 3／6／12 分钟，任一满足后在下一次用户提交或工具调用前重试；失败后重新计数，成功后清空退避。没有后台定时器、不唤醒模型；不在同一次入口循环重试。`initializationRetry` 显示次数、剩余次数和下次门槛。手动 `/maestro-hooks reload` 立即重试并重置退避，不自动安装依赖或改写配置。
+- 初始化完成后的配置冲突、协议和非零退出等基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。Hook 调用超时按下述职责隔离，不写入会话级失败状态。真实 evaluator 的退出码 2／明确 deny 仍按原语义阻断，不因超时隔离而放行。已执行的 PostToolUse 不能回滚，非超时错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
 - 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期的稳定启动策略使用 `systemPrompt`，动态上下文使用宿主可信 agent 消息追加到历史，不调用 `sendMessage` 排入 steer 队列。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
 - 原生 `claudeHooks.enabled` 打开即报冲突，不静默叠加；同会话重复插件实例也拒绝。不能识别任意第三方手写扩展的行为，不声称能检测所有外部桥接。
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。
@@ -272,7 +273,7 @@ npm pack --dry-run
 
 `npm test` 使用真实本机 Maestro evaluator，覆盖告警、阻断、通知隔离／读一次、批量及默认单任务规范注入、协议／命令边界、超时／取消／输出限制。`smoke` 自动创建临时隔离目录，真实项目级安装插件并启动 OMP RPC／print，使用本地确定性 HTTP provider 驱动真实工具；另外验证不同提示产生的动态上下文不会改写 system 和已有请求消息前缀、普通下一轮保留历史、追加不同告警以及重启恢复保留。结束后清理目录，不使用用户模型凭据或改写用户配置；不将请求前缀稳定等同于真实上游缓存命中。
 
-超时回归使用真实子进程注入超时，覆盖守卫阻断、后续调用恢复、事件预算耗尽、取消优先与协议错误不降级。smoke 另外给真实 Maestro 子进程设置 1 ms 的测试预算，验证启动／提示／工具前后／Stop 超时、当前工具阻断、后续工具可执行、状态诊断和无需 reload 的下一轮；不将故障注入当作 evaluator 已成功执行业务。
+超时回归使用真实子进程注入超时，覆盖守卫阻断、后续调用恢复、事件预算耗尽、取消优先与协议错误不降级；初始化回归确认耗时超过旧 5 秒限制的目录可成功加载，退避回归覆盖工具／时间边界、三次上限、重置与会话隔离。smoke 使用真实 10 秒初始化预算注入目录超时，验证关闭原因、对话与工具继续、前两次工具不重试、第三次完成后下一提交自动恢复；另外给真实 Maestro 子进程设置 1 ms 测试预算验证 Hook 执行超时。不将故障注入当作 evaluator 已成功执行业务。
 
 已实测：Windows x64，OMP 二进制 `18.12.6`，Maestro `0.5.92`，Node `24.22.1`。接口对照本机 npm 源码 `18.12.4` 及上游 `v18.12.6`。macOS／Linux 尚未实机验证；已提供三平台 CI 回归矩阵，但未把未执行的 CI 当作通过。
 

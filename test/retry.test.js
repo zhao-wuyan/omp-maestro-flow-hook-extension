@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { InitializationRetry } from '../src/retry.js';
+
+test('initialization retries use either exponential tool or time thresholds and stop after three attempts', () => {
+  let now = 1000;
+  const retry = new InitializationRetry(() => now);
+  retry.failed();
+  retry.toolCompleted();
+  retry.toolCompleted();
+  now += 179999;
+  assert.equal(retry.takeDue(), false);
+  retry.toolCompleted();
+  assert.equal(retry.takeDue(), true);
+  assert.equal(retry.takeDue(), false, 'A concurrent caller must not consume another retry');
+  retry.failed();
+  for (let n = 0; n < 5; n++) retry.toolCompleted();
+  now += 359999;
+  assert.equal(retry.takeDue(), false);
+  now++;
+  assert.equal(retry.takeDue(), true, 'Time alone permits the second retry');
+  retry.failed();
+  for (let n = 0; n < 11; n++) retry.toolCompleted();
+  now += 719999;
+  assert.equal(retry.takeDue(), false);
+  retry.toolCompleted();
+  assert.equal(retry.takeDue(), true);
+  retry.failed();
+  now += 3600000;
+  for (let n = 0; n < 100; n++) retry.toolCompleted();
+  assert.equal(retry.takeDue(), false);
+  assert.equal(retry.status().remaining, 0);
+  retry.reset();
+  assert.deepEqual(retry.status(), { attempts: 0, remaining: 3 });
+  assert.equal(retry.takeDue(), false);
+  retry.failed();
+  now += 180000;
+  assert.equal(retry.takeDue(), true, 'Manual reset starts a fresh retry sequence');
+});
+
+test('retry state is isolated between sessions and thresholds restart after each failure', () => {
+  let now = 0;
+  const first = new InitializationRetry(() => now);
+  const second = new InitializationRetry(() => now);
+  first.failed();
+  for (let n = 0; n < 3; n++) first.toolCompleted();
+  assert.equal(second.takeDue(), false);
+  assert.equal(first.takeDue(), true);
+  now = 1000000;
+  first.failed();
+  assert.equal(first.status().retryAt, 1360000);
+  assert.equal(first.status().toolsCompleted, 0);
+  assert.equal(first.takeDue(), false);
+});

@@ -52,7 +52,18 @@ export async function resolveRuntime(config, env = process.env) {
   const node = config.node ?? await findExecutable('node', env);
   if (/\.(cmd|bat)$/i.test(node)) throw new HookError('runtime', 'node must be a native executable, not a shell shim');
   const metadataScript = `const m = await import(process.argv[1]); console.log(JSON.stringify({claude:m.HOOK_DEFS,codex:m.CODEX_HOOK_DEFS}));`;
-  const metadata = await runProcess(node, ['--input-type=module', '-e', metadataScript, pathToFileURL(path.join(runtime.root, 'dist/src/commands/hooks.js')).href], { timeoutMs: 5000, env });
+  const started = performance.now();
+  let metadata;
+  try {
+    metadata = await runProcess(node, ['--input-type=module', '-e', metadataScript, pathToFileURL(path.join(runtime.root, 'dist/src/commands/hooks.js')).href], { timeoutMs: 10000, env });
+  } catch (error) {
+    if (error.kind === 'timeout') {
+      const timeout = new HookError('timeout', 'Maestro initialization timed out while loading the hook catalog (limit 10000 ms)');
+      timeout.diagnostic = { phase: 'initialization', operation: 'load-hook-catalog', durationMs: Math.round(performance.now() - started), timeoutMs: 10000, action: 'disable-session-hooks' };
+      throw timeout;
+    }
+    throw error;
+  }
   if (metadata.code !== 0) throw new HookError('runtime', 'Cannot read the installed Maestro host hook catalog');
   let catalogs;
   try { catalogs = JSON.parse(metadata.stdout); }
