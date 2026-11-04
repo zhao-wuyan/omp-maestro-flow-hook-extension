@@ -1,0 +1,28 @@
+README.md
+  h_b23cf7c6b3692f 254-256,276
+package.json
+  h_b23cf7c6b3692f 3
+scripts/smoke.mjs
+  h_b23cf7c6b3692f 189-192,304-351
+src/index.js
+  h_b23cf7c6b3692f 4,33-39,55,91-93,113,115-123,154-168,183,196,220,228,274
+src/retry.js
+  h_b23cf7c6b3692f 1-30
+src/runtime.js
+  h_b23cf7c6b3692f 55-66
+test/retry.test.js
+  h_b23cf7c6b3692f 1-54
+test/runtime.test.js
+  h_b23cf7c6b3692f 3,20-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3bad358ae796feb2babc17ab7788097c92cb440d",
+  "prompts": {},
+  "humans": {
+    "h_b23cf7c6b3692f": {
+      "author": "诏无言 <zhao-wuyan@foxmail.com>"
+    }
+  }
+}
