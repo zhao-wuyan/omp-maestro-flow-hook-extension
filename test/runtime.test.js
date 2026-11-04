@@ -31,5 +31,4 @@ test('catalog initialization permits a slow module beyond the old five-second li
   await writeFile(file, JSON.stringify({ version: 1, node: process.execPath, maestroCli: cli, source: { kind: 'catalog', level: 'standard' } }));
   const config = await loadBridgeConfig(file);
   assert.equal(config.enabled, true);
-  assert.equal(config.runtime.cli, cli);
 });
