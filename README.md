@@ -259,7 +259,7 @@ omp plugin list --local
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。
 - 超时分级：`prompt-guard`、`workflow-guard`、`preflight-guard`、`spec-validator`、`knowledge-guard` 及未知 Hook 默认拒绝当前操作；提示守卫超时拒绝本次用户提交（含 print/json）。上下文、规范注入、通知及维护 Hook（`session-context`、`kg-auto-init`、`search-daemon-start`、`spec-injector`、`skill-context`、`keyword-spec-injector`、`kg-sync`、`delegate-monitor`、`search-cache-invalidator`、`team-monitor`、`telemetry`、`coordinator-tracker`）超时后明确告警并继续后续 Hook；不伪装为成功、不自动重试、不增加预算。事件总预算耗尽时，后续 Hook 不再启动，但守卫仍拒绝当前操作，不因前面的可选 Hook 耗尽预算而绕过。后续工具和用户请求可正常重新评估，无需 reload。
 - 超时不论 debug 是否开启都通过被动 UI 通知和结构化日志报告；`/maestro-hooks status` 的 `lastTimeout` 保留最近一次记录（reload 后清空）：`sessionId`、`event`、`hook`、`durationMs`、实际 `timeoutMs`、`hookBudgetMs`、`eventBudgetMs`、限制来源 `scope: hook|event` 及动作 `action: block-current|warn-and-continue`。不保存 prompt、工具参数或 stdout；进程树清理耗时可能使实际耗时超过预算。
-- 取消：Stop 使用事件 signal；session shutdown／agent end 中止仍运行的工具 Hook。当前 OMP 没有给普通事件公开每次调用的 AbortSignal；用户取消到 `agent_end` 之前存在有限延迟，最多受上述预算约束。Maestro 自己有意启动的后台搜索服务不作为孤儿进程杀掉。
+- 取消：Stop 使用事件 signal；session shutdown／agent end 中止仍运行的工具 Hook。工具 Hook 的取消状态在每次实际 `agent_start` 时重置，包括模型自动重试和内部续轮，不依赖新的用户输入或 `before_agent_start`；session shutdown 的取消不会重置。当前 OMP 没有给普通事件公开每次调用的 AbortSignal；用户取消到 `agent_end` 之前存在有限延迟，最多受上述预算约束。Maestro 自己有意启动的后台搜索服务不作为孤儿进程杀掉。
 - 普通错误日志只记录错误类型；超时另外记录上述有界诊断字段，不记录 prompt、密钥、stdout 或完整工具输入。Maestro 自己的分析／日志／通知副作用仍按原实现保存，使用前应检查其配置。
 - 当前 Maestro evaluator 不需要 `transcript_path`，不生成伪 transcript，也不创建持久敏感副本。工具响应投影为对象，不把 content 数组当作 Claude response；当前 delegate-monitor 实际只读 session 通知，不读取 tool_response。
 
@@ -274,6 +274,8 @@ npm pack --dry-run
 `npm test` 使用真实本机 Maestro evaluator，覆盖告警、阻断、通知隔离／读一次、批量及默认单任务规范注入、协议／命令边界、超时／取消／输出限制。`smoke` 自动创建临时隔离目录，真实项目级安装插件并启动 OMP RPC／print，使用本地确定性 HTTP provider 驱动真实工具；另外验证不同提示产生的动态上下文不会改写 system 和已有请求消息前缀、普通下一轮保留历史、追加不同告警以及重启恢复保留。结束后清理目录，不使用用户模型凭据或改写用户配置；不将请求前缀稳定等同于真实上游缓存命中。
 
 超时回归使用真实子进程注入超时，覆盖守卫阻断、后续调用恢复、事件预算耗尽、取消优先与协议错误不降级；初始化回归确认耗时超过旧 5 秒限制的目录可成功加载，退避回归覆盖工具／时间边界、三次上限、重置与会话隔离。smoke 使用真实 10 秒初始化预算注入目录超时，验证关闭原因、对话与工具继续、前两次工具不重试、第三次完成后下一提交自动恢复；另外给真实 Maestro 子进程设置 1 ms 测试预算验证 Hook 执行超时。不将故障注入当作 evaluator 已成功执行业务。
+
+取消生命周期回归通过扩展事件入口和真实 Hook 子进程验证：无新用户提交的连续重试仍执行 Bash／Edit 守卫，真实拒绝不放行；agent end 取消在途 Hook 后下一运行恢复；session shutdown 后仍拒绝执行。仅替代宿主 UI／设置接口，不将这些事件测试冒充真实 OMP 自动重试端到端验证。
 
 已实测：Windows x64，OMP 二进制 `18.12.6`，Maestro `0.5.92`，Node `24.22.1`。接口对照本机 npm 源码 `18.12.4` 及上游 `v18.12.6`。macOS／Linux 尚未实机验证；已提供三平台 CI 回归矩阵，但未把未执行的 CI 当作通过。
 

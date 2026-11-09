@@ -176,7 +176,6 @@ export default function maestroHooks(api) {
   api.on('session_branch', async (_event, ctx) => { await start(ctx, 'resume'); summarize(ctx); });
 
   api.on('input', async (event, ctx) => {
-    if (operation.signal.aborted) operation = new AbortController();
     if (/^\/maestro-hooks(?:\s|$)/.test(event.text.trim())) return;
     if (event.source === 'extension') { ignoredExtensionPrompts++; return; }
     if (ctx.agent.kind !== 'main') return;
@@ -195,7 +194,6 @@ export default function maestroHooks(api) {
     if (ctx.agent.kind !== 'main') return;
     if (['print', 'json'].includes(ctx.mode) && !ignoredExtensionPrompts) await retryInitialization(ctx);
     if (failure) { ctx.abort(); return; }
-    if (operation.signal.aborted) operation = new AbortController();
     // print/json 模式没有 input 事件；只处理真实 CLI 提交。
     if (['print', 'json'].includes(ctx.mode) && !ignoredExtensionPrompts && enabled(ctx)) {
       try {
@@ -277,6 +275,10 @@ export default function maestroHooks(api) {
     },
   });
 
+  // 自动重试／内部续轮不经过 input 或 before_agent_start，但仍发出 agent_start。
+  api.on('agent_start', () => {
+    if (operation.signal.aborted) operation = new AbortController();
+  });
   api.on('agent_end', () => { operation.abort(); });
   api.on('session_shutdown', () => {
     shuttingDown.abort();
