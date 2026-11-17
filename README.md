@@ -254,6 +254,7 @@ omp plugin list --local
 - 初始化加载 Hook 目录的子进程预算为 10 秒。初始化失败（包括缺少依赖、配置错误和超时）仅暂停当前会话的 Maestro Hook，显示并保存具体关闭原因；**正常对话和所有工具继续工作**，不写入会话级阻断错误，不伪装 Hook 已运行。超时的 `lastTimeout` 记录 `phase: initialization`、`operation: load-hook-catalog`、耗时、10000 ms 预算及 `action: disable-session-hooks`。
 - 初始化失败后最多自动重试 3 次：每次失败后分别等待 3／6／12 次工具调用完成，或 3／6／12 分钟，任一满足后在下一次用户提交或工具调用前重试；失败后重新计数，成功后清空退避。没有后台定时器、不唤醒模型；不在同一次入口循环重试。`initializationRetry` 显示次数、剩余次数和下次门槛。手动 `/maestro-hooks reload` 立即重试并重置退避，不自动安装依赖或改写配置。
 - 初始化完成后的配置冲突、协议和非零退出等基础设施错误仍在 UI／状态中可见；PreToolUse fail-closed，后续用户提交也停止直至重载恢复。Hook 调用超时按下述职责隔离，不写入会话级失败状态。真实 evaluator 的退出码 2／明确 deny 仍按原语义阻断，不因超时隔离而放行。已执行的 PostToolUse 不能回滚，非超时错误通过可信上下文通知。Stop 基础设施错误不制造无限继续。
+- `agent_end.willContinue: true` 表示宿主仍会续轮或等待异步工作，不取消当前守卫；即使该通知晚于下一轮 `agent_start` 到达也不污染新轮次。只有终止性 `agent_end` 才取消本轮在途 Hook，下一次 `agent_start` 恢复；会话关闭的取消不可恢复。
 - 使用原生 `tool_call`／`tool_result.additionalContext`，不是普通工具输出；生命周期的稳定启动策略使用 `systemPrompt`，动态上下文使用宿主可信 agent 消息追加到历史，不调用 `sendMessage` 排入 steer 队列。Stop 仅明确阻断时继续一次，`stop_hook_active` 防循环；只有遥测副作用时不唤醒模型。
 - 原生 `claudeHooks.enabled` 打开即报冲突，不静默叠加；同会话重复插件实例也拒绝。不能识别任意第三方手写扩展的行为，不声称能检测所有外部桥接。
 - 默认每次 Hook 5 秒、整个事件 20 秒，可设置 `timeoutMs`／`eventBudgetMs`，最大 20 秒，低于 OMP 默认 30 秒处理时限。stdout／stderr 并行读取、合计 1 MiB 限制；超时杀进程树（Windows `taskkill /T /F`，POSIX process group）。

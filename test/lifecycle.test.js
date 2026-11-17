@@ -63,17 +63,21 @@ async function waitForFile(file) {
   }
 }
 
-test('automatic continuations run guarded Bash/Edit without a new user submission', async t => {
+test('automatic continuations keep Bash/Edit/Write guarded across delayed nonterminal end notifications', async t => {
   const { root, emit, call } = await setup(t);
   await emit('agent_start');
   assert.equal((await call('first', 'bash')).additionalContext, 'guard-checked');
-  for (const tool of ['bash', 'edit']) {
-    await emit('agent_end', { willContinue: true });
+  for (const tool of ['bash', 'edit', 'write']) {
+    await emit('agent_end', { willContinue: true, awaitingAsyncWork: true });
+    const paused = await call(`${tool}-wake`, tool);
+    assert.equal(paused.additionalContext, 'guard-checked');
     await emit('agent_start');
+    // 宿主异步投递上一轮的结束通知时，下一轮可能已开始。
+    await emit('agent_end', { willContinue: true });
     const result = await call(tool, tool);
     assert.equal(result.block, undefined);
     assert.equal(result.additionalContext, 'guard-checked');
-    assert.equal(await readFile(path.join(root, tool), 'utf8'), tool === 'bash' ? 'Bash' : 'Edit');
+    assert.equal(await readFile(path.join(root, tool), 'utf8'), tool === 'bash' ? 'Bash' : tool === 'edit' ? 'Edit' : 'Write');
   }
   assert.deepEqual(await call('denied', 'bash', 'deny'), { block: true, reason: 'guard-denied' });
 });

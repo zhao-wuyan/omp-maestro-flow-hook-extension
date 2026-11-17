@@ -275,11 +275,11 @@ export default function maestroHooks(api) {
     },
   });
 
-  // 自动重试／内部续轮不经过 input 或 before_agent_start，但仍发出 agent_start。
+  // agent_end 可异步晚于下一轮 agent_start；续轮通知不能取消仍在运行的守卫。
   api.on('agent_start', () => {
     if (operation.signal.aborted) operation = new AbortController();
   });
-  api.on('agent_end', () => { operation.abort(); });
+  api.on('agent_end', event => { if (!event.willContinue) operation.abort(); });
   api.on('session_shutdown', () => {
     shuttingDown.abort();
     for (const id of ownedSessions) if (instances.get(id) === api) instances.delete(id);
